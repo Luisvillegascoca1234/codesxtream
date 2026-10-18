@@ -1,9 +1,10 @@
 import http from 'node:http';
+import https from 'node:https';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHmac } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { AppError, normalizeProvider, playerApi, remoteRequest, readLimited, rewriteManifest } from './lib/provider.mjs';
 
@@ -25,11 +26,11 @@ async function body(req) {
   catch { throw new AppError('La solicitud no es válida.'); }
 }
 
-export function createApp({ allowPrivate = false, freeChannels = FREE_CHANNELS, defaultProvider = DEFAULT_PROVIDER_URL } = {}) {
+export function createApp({ allowPrivate = false, freeChannels = FREE_CHANNELS, defaultProvider = DEFAULT_PROVIDER_URL, tls } = {}) {
   normalizeProvider(defaultProvider);
   const sessions = new Map();
   const attempts = new Map();
-  const publicMedia = { public: true, media: new Map(), mediaByUrl: new Map(), controllers: new Set() };
+  const publicMedia = { public: true, mediaIdentityKey: randomBytes(32), media: new Map(), mediaByUrl: new Map(), controllers: new Set() };
   const gc = setInterval(() => {
     for (const [key, value] of sessions) if (Date.now() > value.expires) {
       for (const controller of value.controllers) controller.abort();
@@ -43,28 +44,35 @@ export function createApp({ allowPrivate = false, freeChannels = FREE_CHANNELS, 
     if (session) for (const controller of session.controllers) controller.abort();
     sessions.delete(key);
   }
+  function mediaIdentity(session, url) {
+    const target = new URL(url);
+    return createHmac('sha256', session.mediaIdentityKey).update(target.origin + target.pathname).digest('hex').slice(0, 48);
+  }
   function register(session, url) {
     const prefix = session.public ? '/api/free/media/' : '/api/media/';
     const string = String(url);
     if (!['http:', 'https:'].includes(new URL(string).protocol)) throw new AppError('El proveedor usa un protocolo no compatible.', 502);
     const existing = session.mediaByUrl.get(string);
-    if (existing) return `${prefix}${existing}`;
+    // HLS compares segment paths while ignoring query signatures. Preserve that
+    // identity without exposing either the upstream path or its query parameters.
+    const pathname = `${prefix}${mediaIdentity(session, string)}`;
+    if (existing) return `${pathname}?r=${existing}`;
     while (session.media.size >= 8192) {
       const first = session.media.keys().next().value;
       session.mediaByUrl.delete(session.media.get(first)); session.media.delete(first);
     }
     const token = id(); session.media.set(token, string); session.mediaByUrl.set(string, token);
-    return `${prefix}${token}`;
+    return `${pathname}?r=${token}`;
   }
 
-  const server = http.createServer(async (req, res) => {
+  const handler = async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob: https://test-streams.mux.dev; connect-src 'self' https://test-streams.mux.dev; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
     let url;
     try {
-      url = new URL(req.url, `http://${req.headers.host}`);
+      url = new URL(req.url, `${req.socket.encrypted ? 'https' : 'http'}://${req.headers.host}`);
       const rawCookie = /(?:^|;\s*)xc_session=([a-f0-9]{48})(?:;|$)/.exec(req.headers.cookie || '');
       const key = rawCookie?.[1];
       let session = key && sessions.get(key);
@@ -109,17 +117,18 @@ export function createApp({ allowPrivate = false, freeChannels = FREE_CHANNELS, 
             transport: base.protocol === 'https:' ? 'HTTPS' : 'HTTP',
           };
           candidate.expires = Date.now() + SESSION_TTL;
+          candidate.mediaIdentityKey = randomBytes(32);
           candidate.media = new Map(); candidate.mediaByUrl = new Map(); candidate.channels = new Map(); candidate.controllers = new Set();
           const newKey = id();
           if (key) destroySession(key);
           if (sessions.size >= 50) throw new AppError('Hay demasiadas sesiones abiertas. Intenta más tarde.', 503);
           sessions.set(newKey, candidate);
-          res.setHeader('Set-Cookie', `xc_session=${newKey}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL / 1000}`);
+          res.setHeader('Set-Cookie', `xc_session=${newKey}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL / 1000}${req.socket.encrypted ? '; Secure' : ''}`);
           return json(res, { account: candidate.account });
         }
         if (url.pathname === '/api/disconnect' && req.method === 'POST') {
           if (key) destroySession(key);
-          res.setHeader('Set-Cookie', 'xc_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
+          res.setHeader('Set-Cookie', `xc_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${req.socket.encrypted ? '; Secure' : ''}`);
           return json(res, { ok: true });
         }
         if (url.pathname === '/api/session' && req.method === 'GET') return json(res, { account: session?.account || null });
@@ -150,8 +159,9 @@ export function createApp({ allowPrivate = false, freeChannels = FREE_CHANNELS, 
         }
         if ((publicResource || url.pathname.startsWith('/api/media/')) && ['GET', 'HEAD'].includes(req.method)) {
           const token = url.pathname.slice(publicResource ? '/api/free/media/'.length : '/api/media/'.length);
-          const target = session.media.get(token);
-          if (!target) throw new AppError('La dirección de reproducción caducó. Vuelve a elegir el canal.', 404);
+          const resource = url.searchParams.get('r');
+          const target = /^[a-f0-9]{48}$/.test(resource || '') && session.media.get(resource);
+          if (!target || mediaIdentity(session, target) !== token) throw new AppError('La dirección de reproducción caducó. Vuelve a elegir el canal.', 404);
           const controller = new AbortController();
           session.controllers.add(controller);
           res.once('close', () => { controller.abort(); session.controllers.delete(controller); });
@@ -182,6 +192,14 @@ export function createApp({ allowPrivate = false, freeChannels = FREE_CHANNELS, 
         '/app.js': ['public/app.js', 'text/javascript; charset=utf-8'],
         '/styles.css': ['public/styles.css', 'text/css; charset=utf-8'],
         '/icon.svg': ['public/icon.svg', 'image/svg+xml'],
+        '/manifest.webmanifest': ['public/manifest.webmanifest', 'application/manifest+json; charset=utf-8'],
+        '/pwa.js': ['public/pwa.js', 'text/javascript; charset=utf-8'],
+        '/sw.js': ['public/sw.js', 'text/javascript; charset=utf-8'],
+        '/offline.html': ['public/offline.html', 'text/html; charset=utf-8'],
+        '/icons/icon-192.png': ['public/icons/icon-192.png', 'image/png'],
+        '/icons/icon-512.png': ['public/icons/icon-512.png', 'image/png'],
+        '/icons/maskable-512.png': ['public/icons/maskable-512.png', 'image/png'],
+        '/icons/apple-touch-icon.png': ['public/icons/apple-touch-icon.png', 'image/png'],
         '/vendor/hls.min.js': ['node_modules/hls.js/dist/hls.min.js', 'text/javascript; charset=utf-8'],
       };
       const file = files[url.pathname];
@@ -195,7 +213,8 @@ export function createApp({ allowPrivate = false, freeChannels = FREE_CHANNELS, 
       // Deliberately do not log errors or upstream URLs: they can contain credentials.
       json(res, { error: error instanceof AppError ? error.message : 'No se pudo completar la solicitud. Intenta nuevamente.' }, error instanceof AppError ? error.status : 500);
     }
-  });
+  };
+  const server = tls ? https.createServer(tls, handler) : http.createServer(handler);
   server.requestTimeout = 30000;
   server.headersTimeout = 15000;
   server.on('close', () => {
@@ -209,15 +228,20 @@ export function createApp({ allowPrivate = false, freeChannels = FREE_CHANNELS, 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT || 3000);
   const host = process.env.HOST || '0.0.0.0';
-  const server = createApp();
+  const keyFile = process.env.TLS_KEY_FILE;
+  const certFile = process.env.TLS_CERT_FILE;
+  if (Boolean(keyFile) !== Boolean(certFile)) throw new Error('Configura TLS_KEY_FILE y TLS_CERT_FILE juntos para usar HTTPS.');
+  const tls = keyFile && certFile ? { key: await readFile(keyFile), cert: await readFile(certFile) } : undefined;
+  const scheme = tls ? 'https' : 'http';
+  const server = createApp({ tls });
   server.on('error', error => {
     console.error(error.code === 'EADDRINUSE' ? `El puerto ${port} está ocupado. Prueba con otro puerto (PORT).` : 'No se pudo iniciar el servidor local.');
     process.exitCode = 1;
   });
   server.listen(port, host, () => {
-    console.log(`\n  XtremeCodesVille · prueba local\n  PC: http://localhost:${port}`);
+    console.log(`\n  XtremeCodesVille · prueba local\n  PC: ${scheme}://localhost:${port}`);
     for (const list of Object.values(os.networkInterfaces())) for (const entry of list || []) {
-      if (entry.family === 'IPv4' && !entry.internal && /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(entry.address)) console.log(`  Red local: http://${entry.address}:${port}`);
+      if (entry.family === 'IPv4' && !entry.internal && /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(entry.address)) console.log(`  Red local: ${scheme}://${entry.address}:${port}`);
     }
     console.log('  Detener: Ctrl+C\n');
   });

@@ -23,6 +23,7 @@ if ($Accion -eq 'detener') {
   exit 0
 }
 if ($running) { Write-Host "La app ya esta iniciada: http://localhost:$($savedState.port)"; exit 0 }
+if ($env:TLS_KEY_FILE -or $env:TLS_CERT_FILE) { throw 'Para iniciar con certificados HTTPS usa npm.cmd start en la consola. Este lanzador corresponde a la prueba HTTP local.' }
 $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
 if (-not $nodeCommand) { throw 'Instala Node.js 22 o superior antes de iniciar.' }
 Push-Location -LiteralPath $appRoot

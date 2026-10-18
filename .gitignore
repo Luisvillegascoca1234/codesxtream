@@ -9,3 +9,8 @@ playwright-report/
 .local-runtime.json
 .iphone-firewall-backup.json
 .iphone-firewall-result.json
+certs/
+*.pem
+*.key
+*.pfx
+*.p12

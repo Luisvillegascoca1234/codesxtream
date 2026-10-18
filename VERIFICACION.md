@@ -1,5 +1,45 @@
 # Verificación local · 18 de octubre de 2026
 
+## Fluidez de video: revision con dos subagentes
+
+El usuario aclaro que los tirones ocurren en PC e iPhone en GOL BOL 1 HD. Dos subagentes revisaron por separado interfaz y reproduccion/proxy; ambos confirmaron que la recuperacion anterior llamaba a loadSource ante cualquier error fatal de red, recreando MediaSource y descartando el buffer. La interfaz no hace renderizados periodicos durante el video; no se encontraron tareas largas del hilo principal en los 30 segundos iniciales medidos. El proxy ya usa pipeline con backpressure y cancela solicitudes al cerrar el cliente.
+
+Hallazgos y cambios aplicados:
+
+- Recuperar listas/segmentos ya abiertos con startLoad(-1), conservando MediaSource. loadSource queda para errores del manifiesto inicial o cuando no hay niveles cargados.
+- Renovar el presupuesto de recuperacion tras 30 segundos de reproduccion estable y al menos 25 segundos de avance. Un salto de posicion no lo renueva. Los listeners se eliminan con AbortController al detener/cambiar canal.
+- Conservar la identidad de ruta de cada recurso aunque rote su query firmada. La ruta del proxy es un HMAC por sesion de origen + pathname; un token opaco r identifica la URL completa. Se valida la correspondencia antes de solicitar el recurso. Se conservan las firmas anteriores, las protecciones SSRF y el aislamiento de sesiones. No se expone la ruta ni la query original.
+- Metricas acotadas en memoria por reproduccion, consultables en playbackSnapshot(): buffer, cuadros, pausas, recuperaciones, ultimo codigo de error y duracion de descarga de segmento. Sin URLs, mensajes crudos ni credenciales.
+- Ante levelParsingError, si el catalogo tiene una variante H.264 con el mismo nombre base, se ofrece Probar version H.264. Solo se cambia al pulsarlo. No se impone una calidad ni se modifica el catalogo del proveedor.
+
+Pruebas y limites de la evidencia:
+
+- GOL BOL 1 HD, fuente 8397: 1280 x 720 AVC. Antes se observo levelParsingError por media sequence mismatch y reinicio de tiempo/contadores de video en unos 30 segundos. Los mensajes crudos no se guardaron porque pueden incluir listas y URLs.
+- Tras corregir la recuperacion, 45 segundos de la misma fuente conservaron MediaSource (cero detach durante reproduccion), con una recuperacion y una pausa breve; la inconsistencia de segmentos no desaparecio por completo. La correccion de firma opaca evita fabricar diferencias de ruta por query, pero no garantiza corregir incoherencias reales de origen/CDN.
+- Se probo un margen de cinco segmentos respecto del directo. No elimino las pausas en esa fuente, por lo que se restablecio la configuracion de latencia original en la version final.
+- GOL BOL 1 HD - h264, fuente 484151: 35 segundos medidos, avance de 34,8 segundos, imagen 1280 x 720, 1080 cuadros, cero descartados, cero pausas y cero errores. Es una observacion limitada, no garantia de disponibilidad del proveedor.
+- France 24 con fallo de segmento inyectado: fuente MSE sin cambios, cero detach, video avanzando, buffer de 10 a 18,3 segundos, cero pausas y cero cuadros descartados durante la recuperacion.
+- Boton de alternativa comprobado con un error controlado: ofrece 484151, cambia al pulsarlo, muestra imagen real y oculta la sugerencia. En una espera natural posterior de 30 segundos no aparecio el error; se uso inyeccion para verificar la interfaz sin depender del fallo intermitente.
+- 17 pruebas aprobadas: firmas rotatorias conservan identidad sin mezclar cuerpos, manipulacion de ruta rechazada, sesiones aisladas, recuperacion sin reemplazar fuente, limite finito de intentos y renovacion solo tras avance estable. npm run check correcto.
+
+Pendiente: confirmacion del usuario en Safari fisico y observacion mas larga del proveedor. Una mejora adicional detectada por el subagente para sesiones largas es proteger los tokens de manifiestos raiz frente al limite FIFO de 8192 recursos y renovar la URL al reintentar si ya caduco. El subagente reprodujo esa caducidad con un proveedor sintetico de 8192 segmentos; no es la causa demostrada de los cortes a los pocos segundos y no se amplio esta reparacion a esa politica de recursos. Tambien se pospuso optimizar la reconstruccion del catalogo, porque el problema informado ocurre durante reproduccion sin interaccion.
+
+## PWA instalable
+
+Manifest con identidad estable, inicio y alcance en /, display standalone e iconos PNG 192, 512, maskable y apple-touch-icon 180. Boton Instalar app con beforeinstallprompt en navegadores compatibles y ayuda Compartir / Agregar a pantalla de inicio en iPhone. Tarjeta oculta al abrir en modo standalone. Service worker con lista cerrada de archivos estaticos, pantalla sin conexion y actualizaciones esperando confirmacion mediante Actualizar app.
+
+Verificado con Chromium sobre servidor separado de QA en localhost:3001:
+
+- Manifest sin errores; Page.getInstallabilityErrors sin incidencias en el perfil normal. Un contexto aislado devolvio solamente in-incognito, como corresponde.
+- Service worker activo y cache con 11 recursos estaticos. Tras reproducir France 24 (1024 x 576), ninguna ruta /api/ en cache.
+- Sin red, navegar al inicio muestra No hay conexion; fetch /api/session falla en red, sin devolver datos ni HTML de respaldo. Volver a intentar con red recupera la app.
+- Actualizacion real de worker v1 a v2: banner visible con worker esperando; pulsar Actualizar app activa, recarga y elimina la cache antigua. Sin recarga forzada antes de pulsarlo.
+- Vista 393 x 852 revisada visualmente sin desbordamiento horizontal. Ayuda de instalacion para iPhone comprobada con user-agent simulado; no sustituye una instalacion en Safari fisico.
+- HTTPS directo comprobado con certificado efimero de QA y proveedor simulado: salud HTTP 200, acceso con Origin HTTPS correcto, cookie Secure y rechazo 403 de Origin HTTP. Solo la peticion local de QA omitio verificacion del certificado autofirmado; la app no desactiva validacion TLS.
+- npm run check correcto y 12 pruebas integradas aprobadas, incluyendo tipos MIME del manifest/worker y dimensiones de los PNG. Certificados de QA eliminados y formatos de claves excluidos de Git.
+
+Pendiente para el iPhone: disponer de HTTPS con certificado valido y comprobar Agregar a pantalla de inicio en el dispositivo. La URL LAN HTTP actual sigue sirviendo TV, pero no habilita el service worker. No se publico un dominio ni se instalaron certificados de confianza. El servidor local se reinicia para activar las nuevas rutas, lo que elimina las sesiones en memoria.
+
 ## Cortes intermitentes y Samsung con AirPlay
 
 Se agregaron dos intentos de reconexion ante errores fatales de red de hls.js y un intento de recuperacion del motor multimedia. Si no se recupera la senal, se muestra una causa mas concreta y el boton Reintentar. Un error terminal oculta el indicador de carga y cambia el estado a Reproduccion interrumpida; un evento waiting posterior no vuelve a activar el indicador. Detener o cambiar canal cancela las reconexiones pendientes.

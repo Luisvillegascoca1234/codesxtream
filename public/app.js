@@ -7,6 +7,7 @@ const video = $('#video');
 let toastTimer;
 let videoCheckTimer;
 let reconnectTimer;
+let playbackEvents;
 
 async function api(path, data) {
   let response;
@@ -163,6 +164,7 @@ $('#toggle-password').addEventListener('click', () => {
 });
 function stopPlayback() {
   ++state.playGeneration;
+  playbackEvents?.abort(); playbackEvents = null;
   clearTimeout(videoCheckTimer);
   clearTimeout(reconnectTimer);
   state.playbackPhase = 'idle'; state.playbackUrl = null;
@@ -172,6 +174,7 @@ function stopPlayback() {
   state.playing = null;
   $('#player-screen').classList.remove('has-video'); $('#player-placeholder').hidden = false;
   $('#player-loading').hidden = true; $('#playback-error').hidden = true;
+  $('#playback-suggestion').hidden = true;
   $('#stop-button').disabled = true; $('#fullscreen-button').disabled = true;
   $('#free-live-button').setAttribute('aria-pressed', 'false');
   $('#playing-name').textContent = 'Nada en reproducción'; $('#playing-detail').textContent = 'Elige un canal para comenzar';
@@ -209,10 +212,44 @@ function retryPlayback() {
   renderChannels(); startPlayback(url);
 }
 $('#playback-error').addEventListener('click', event => { if (event.target.closest('[data-retry-playback]')) retryPlayback(); });
+function offerCompatibleVariant() {
+  if (!state.playing || state.demo || state.playing.free) return;
+  const baseName = name => name.toLocaleLowerCase('es').replace(/\s*[-·]?\s*h\.?264\b/gi, '').replace(/\s+/g, ' ').trim();
+  const base = baseName(state.playing.name);
+  const alternative = state.channels.find(channel => channel.id !== state.playing.id && /h\.?264\b/i.test(channel.name) && baseName(channel.name) === base);
+  if (!alternative) return;
+  $('#alternative-button').dataset.channel = alternative.id;
+  $('#playback-suggestion').hidden = false;
+}
+$('#alternative-button').addEventListener('click', event => playChannel(event.currentTarget.dataset.channel));
 function startPlayback(url) {
   const generation = state.playGeneration;
   let networkRecoveries = 0;
   let mediaRecoveries = 0;
+  let stableSince = null;
+  let stablePosition = 0;
+  playbackEvents?.abort(); playbackEvents = new AbortController();
+  const eventOptions = { signal: playbackEvents.signal };
+  const stats = state.playbackStats = { stalls: 0, recoveries: 0, sourceReloads: 0, lastError: null, lastSegmentMs: null, hasPlayed: false };
+  video.addEventListener('playing', () => {
+    stats.hasPlayed = true;
+    stableSince = performance.now(); stablePosition = video.currentTime;
+  }, eventOptions);
+  video.addEventListener('waiting', () => {
+    if (stats.hasPlayed && !video.paused) stats.stalls++;
+    stableSince = null;
+  }, eventOptions);
+  for (const event of ['pause', 'seeking']) video.addEventListener(event, () => { stableSince = null; }, eventOptions);
+  video.addEventListener('seeked', () => {
+    if (!video.paused && video.readyState >= 3) { stableSince = performance.now(); stablePosition = video.currentTime; }
+  }, eventOptions);
+  video.addEventListener('timeupdate', () => {
+    if (stableSince === null || video.paused || video.seeking || video.readyState < 3) return;
+    if (performance.now() - stableSince >= 30000 && video.currentTime - stablePosition >= 25) {
+      networkRecoveries = 0; mediaRecoveries = 0;
+      stableSince = performance.now(); stablePosition = video.currentTime;
+    }
+  }, eventOptions);
   state.playbackUrl = url; state.playbackPhase = 'opening';
   $('#player-loading > span:last-child').textContent = 'Abriendo transmisión…';
   video.hidden = false; $('#player-placeholder').hidden = true; $('#player-screen').classList.add('has-video'); $('#player-loading').hidden = false;
@@ -247,14 +284,37 @@ function startPlayback(url) {
     hls.on(window.Hls.Events.BUFFER_CODECS, (_event, data) => {
       if (generation === state.playGeneration) video.dataset.videoCodec = data.video?.codec || '';
     });
+    hls.on(window.Hls.Events.FRAG_LOADED, (_event, data) => {
+      const segmentStats = data.part?.stats || data.frag?.stats;
+      const duration = segmentStats?.loading?.end - segmentStats?.loading?.start;
+      if (Number.isFinite(duration) && duration >= 0) stats.lastSegmentMs = Math.round(duration);
+    });
+    hls.on(window.Hls.Events.FRAG_BUFFERED, () => {
+      if (stableSince === null && !video.paused && !video.seeking && video.readyState >= 3) {
+        stableSince = performance.now(); stablePosition = video.currentTime;
+        if (state.playbackPhase === 'recovering') showPlaybackPlaying();
+      }
+    });
     hls.on(window.Hls.Events.ERROR, (_event, data) => {
+      // Keep only bounded, non-sensitive diagnostics; error messages may contain URLs.
+      if (generation !== state.playGeneration) return;
+      if (Object.values(window.Hls.ErrorDetails).includes(data.details)) stats.lastError = data.details;
+      if (data.details === window.Hls.ErrorDetails.LEVEL_PARSING_ERROR) offerCompatibleVariant();
       if (!data.fatal || generation !== state.playGeneration) return;
+      stableSince = null;
       hls.stopLoad();
       let explanation = 'La transmisión se interrumpió. Elige el canal otra vez para reconectar.';
       if (data.type === window.Hls.ErrorTypes.NETWORK_ERROR) {
         if (networkRecoveries < 2) {
           networkRecoveries++;
-          recover(() => { hls.loadSource(url); hls.startLoad(-1); }, `Reconectando señal (${networkRecoveries}/2)…`, networkRecoveries * 1500);
+          stats.recoveries++;
+          const reloadManifest = !hls.levels.length || [window.Hls.ErrorDetails.MANIFEST_LOAD_ERROR, window.Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT].includes(data.details);
+          recover(() => {
+            // loadSource recreates MediaSource and discards buffered video.
+            // A loaded playlist/segment can resume without resetting the decoder.
+            if (reloadManifest) { stats.sourceReloads++; hls.loadSource(url); }
+            hls.startLoad(-1);
+          }, `Reconectando señal (${networkRecoveries}/2)…`, networkRecoveries * 1500);
           return;
         }
         const causes = {
@@ -262,6 +322,7 @@ function startPlayback(url) {
           manifestLoadTimeOut: 'El servidor tardó demasiado en abrir la señal.',
           levelLoadError: 'El proveedor dejó de actualizar la transmisión.',
           levelLoadTimeOut: 'La actualización de la transmisión tardó demasiado.',
+          levelParsingError: 'El proveedor devolvió una actualización inconsistente de la señal.',
           fragLoadError: 'No se pudo descargar un segmento del video.',
           fragLoadTimeOut: 'La descarga de un segmento del video agotó el tiempo de espera.',
           keyLoadError: 'No se pudo obtener la clave de esta transmisión.',
@@ -278,6 +339,7 @@ function startPlayback(url) {
       } else if (data.type === window.Hls.ErrorTypes.MEDIA_ERROR) {
         if (mediaRecoveries < 1) {
           mediaRecoveries++;
+          stats.recoveries++;
           recover(() => hls.recoverMediaError(), 'Recuperando reproductor…', 750);
           return;
         }
@@ -290,6 +352,15 @@ function startPlayback(url) {
     video.dataset.playbackEngine = 'native';
     video.src = url; video.load(); play();
   } else playbackError('Este navegador no puede reproducir HLS. Prueba Safari en iPhone o un navegador de escritorio actualizado.');
+}
+function playbackSnapshot() {
+  if (!state.playing || !state.playbackStats) return null;
+  let bufferSeconds = 0;
+  for (let index = 0; index < video.buffered.length; index++) {
+    if (video.buffered.start(index) <= video.currentTime && video.buffered.end(index) > video.currentTime) bufferSeconds = video.buffered.end(index) - video.currentTime;
+  }
+  const quality = video.getVideoPlaybackQuality?.();
+  return { engine: video.dataset.playbackEngine, width: video.videoWidth, height: video.videoHeight, bufferSeconds: Math.round(bufferSeconds * 10) / 10, totalFrames: quality?.totalVideoFrames ?? null, droppedFrames: quality?.droppedVideoFrames ?? null, ...state.playbackStats };
 }
 async function playChannel(channelId) {
   const channel = state.channels.find(c => c.id === channelId); if (!channel) return;
@@ -304,7 +375,7 @@ async function playChannel(channelId) {
     if (matchMedia('(max-width: 760px)').matches) $('#player-screen').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (error) { if (generation === state.playGeneration) playbackError(error.message); }
 }
-video.addEventListener('playing', () => {
+function showPlaybackPlaying() {
   clearTimeout(videoCheckTimer);
   state.playbackPhase = 'playing';
   $('#player-loading > span:last-child').textContent = 'Abriendo transmisión…';
@@ -317,7 +388,8 @@ video.addEventListener('playing', () => {
     playbackError('Se recibe audio, pero no se ha podido mostrar imagen. Este canal puede necesitar un formato que tu navegador no admite. Prueba otra variante del canal y verifica que tu navegador esté actualizado.');
     $('#playback-error').dataset.kind = 'missing-video';
   }, 12000);
-});
+}
+video.addEventListener('playing', showPlaybackPlaying);
 video.addEventListener('resize', () => {
   if (!video.videoWidth) return;
   clearTimeout(videoCheckTimer);
@@ -401,7 +473,7 @@ $('#load-more').addEventListener('click', () => { state.shown += 48; renderChann
 document.addEventListener('keydown', event => {
   if (event.key === '/' && !['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName) && !document.querySelector('dialog[open]')) { event.preventDefault(); $('#search').focus(); }
 });
-window.addEventListener('pagehide', () => { clearTimeout(videoCheckTimer); clearTimeout(reconnectTimer); if (state.hls) state.hls.destroy(); video.pause(); video.removeAttribute('src'); video.load(); });
+window.addEventListener('pagehide', () => { playbackEvents?.abort(); clearTimeout(videoCheckTimer); clearTimeout(reconnectTimer); if (state.hls) state.hls.destroy(); video.pause(); video.removeAttribute('src'); video.load(); });
 window.addEventListener('pageshow', event => { if (event.persisted) stopPlayback(); });
 async function init() {
   loadFavorites(); renderConnection();

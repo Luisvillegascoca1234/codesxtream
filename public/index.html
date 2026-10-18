@@ -6,12 +6,17 @@
   <meta name="theme-color" content="#101311">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="XtremeVille">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="description" content="Tu espacio para probar TV en vivo con tu cuenta Xtream Codes.">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180">
   <link rel="stylesheet" href="/styles.css">
   <title>XtremeVille · TV en vivo</title>
   <script src="/vendor/hls.min.js" defer></script>
   <script src="/app.js" defer></script>
+  <script src="/pwa.js" defer></script>
 </head>
 <body>
   <svg class="svg-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
@@ -59,6 +64,14 @@
     <main>
       <section class="page-heading"><div><p class="eyebrow">DALE PLAY A TU MOMENTO</p><h1 id="page-title">Tu TV. A tu manera<span>.</span></h1><p class="page-description" id="page-description">Todos tus canales, un solo lugar. Tú eliges qué ver.</p></div><button class="button button-secondary" id="refresh-button"><svg><use href="#i-refresh"/></svg>Actualizar</button></section>
 
+      <section class="install-card" id="install-card" aria-label="Instalar XtremeVille">
+        <div><strong>Tu TV, a un toque.</strong><p>Agrega XtremeVille a tu pantalla de inicio.</p></div>
+        <button class="button button-secondary" id="install-button">Instalar app</button>
+      </section>
+      <section class="install-card" id="app-update" role="status" hidden>
+        <div><strong>Hay una nueva versión.</strong><p>Actualizar recargará la app y detendrá el video.</p></div>
+        <button class="button button-primary" id="update-button">Actualizar app</button>
+      </section>
       <section class="free-live-card" aria-label="Canal gratuito de prueba">
         <div class="free-channel-mark" aria-hidden="true">24</div>
         <div class="free-channel-text"><span class="eyebrow"><span class="free-live-dot"></span> GRATIS · EN VIVO</span><h2>France 24 Español</h2><p>Noticias internacionales. Sin cuenta ni contraseña. <a href="https://www.france24.com/es/en-vivo" target="_blank" rel="noopener noreferrer">Fuente oficial ↗</a></p></div>
@@ -75,6 +88,7 @@
           </div>
           <div class="now-playing"><div class="channel-avatar small" id="playing-avatar"><svg><use href="#i-tv"/></svg></div><div class="now-playing-text"><strong id="playing-name">Nada en reproducción</strong><span id="playing-detail">Elige un canal para comenzar</span></div><button class="icon-button" id="stop-button" aria-label="Detener reproducción" title="Detener reproducción" disabled><svg><use href="#i-close"/></svg></button><button class="icon-button" id="fullscreen-button" aria-label="Pantalla completa" title="Pantalla completa" disabled><svg><use href="#i-expand"/></svg></button></div>
           <div id="playback-error" class="inline-error player-error" role="alert" hidden></div>
+          <div id="playback-suggestion" class="catalog-message playback-suggestion" role="status" hidden><span>Esta señal presenta inconsistencias. Puedes probar otra versión del mismo canal.</span><button class="button button-secondary" id="alternative-button">Probar versión H.264</button></div>
         </div>
 
         <aside class="connection-card">
@@ -119,5 +133,13 @@
 
   <dialog id="help-dialog" aria-labelledby="help-title"><div class="dialog-heading"><div class="dialog-icon"><svg><use href="#i-device"/></svg></div><button class="icon-button" data-close="help-dialog" aria-label="Cerrar ayuda"><svg><use href="#i-close"/></svg></button></div><p class="eyebrow">DE TU ESCRITORIO A TU BOLSILLO</p><h2 id="help-title">Pruébalo en tu iPhone<span>.</span></h2><ol class="help-steps"><li>Conecta el iPhone al mismo wifi o red doméstica que este PC.</li><li>En Safari, abre la dirección de red local que aparece en la consola al iniciar la app. No uses localhost en el iPhone.</li><li>Introduce tus credenciales y elige un canal. Cada dispositivo inicia su propia sesión.</li></ol><p class="form-note">Mantén el PC encendido y el servidor abierto. Si no carga, revisa el permiso de Node.js en el firewall de Windows para redes privadas.</p><div class="help-callout"><strong>Una transmisión a la vez</strong><p>Si tu cuenta permite una sola conexión, detén el video del PC antes de reproducir en el iPhone.</p></div><p class="form-note">La prueba utiliza HTTP local. El acceso por dominio y la instalación completa como app se preparan con HTTPS en la siguiente etapa.</p></dialog>
   <div id="toast" class="toast" role="status" hidden></div>
+  <dialog id="install-dialog" aria-labelledby="install-title">
+    <div class="dialog-heading"><div class="dialog-icon"><svg><use href="#i-device"/></svg></div><button class="icon-button" id="close-install" aria-label="Cerrar instalación"><svg><use href="#i-close"/></svg></button></div>
+    <p class="eyebrow">SIEMPRE A MANO</p><h2 id="install-title">Instala XtremeVille<span>.</span></h2>
+    <p class="dialog-description" id="install-description">Abre el menú del navegador y elige Instalar app o Agregar a la pantalla de inicio.</p>
+    <ol class="help-steps" id="iphone-install-steps"><li>Abre esta página en Safari y pulsa Compartir.</li><li>Elige Agregar a pantalla de inicio.</li><li>Si aparece Abrir como app, actívalo y pulsa Agregar.</li></ol>
+    <div class="help-callout" id="install-requirement" hidden><strong>Falta una dirección HTTPS</strong><p>La dirección HTTP de este PC permite probar los canales. Para habilitar todas las funciones de la PWA en el iPhone, abre la app desde un dominio con HTTPS y un certificado válido.</p></div>
+    <p class="form-note">La TV en vivo necesita conexión a internet y el servidor encendido. Instalar la app no descarga los canales ni guarda tu contraseña.</p>
+  </dialog>
 </body>
 </html>

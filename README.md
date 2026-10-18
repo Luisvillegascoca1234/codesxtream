@@ -57,7 +57,29 @@ Si cambia la IP del iPhone, esta excepcion dejara de coincidir. Para revertir el
 
 `localhost` en el iPhone apunta al propio iPhone, no a este PC. Los favoritos se guardan en cada navegador y dirección usada. Un teléfono y un PC pueden ocupar dos conexiones del proveedor; detén la reproducción anterior si tu cuenta solo permite una.
 
-Esta fase usa HTTP en la red local. Utiliza una red de confianza. La instalación como PWA, el dominio y HTTPS quedan para la siguiente etapa; no hay service worker ni soporte sin conexión.
+La prueba de red local sigue usando HTTP. La app incluye ahora manifest, iconos PNG, instalacion y un service worker. En localhost se puede verificar como PWA; en el iPhone se necesita HTTPS con certificado valido para habilitar todas las funciones. Los canales en vivo siempre necesitan conexion y el servidor encendido.
+
+## Instalar como PWA
+
+En Chrome o Edge en este PC, abre `http://localhost:3000` y pulsa **Instalar app**; tambien puedes usar la opcion de instalacion del navegador. En iPhone, abre la direccion HTTPS de la app en Safari: **Compartir → Agregar a pantalla de inicio → Agregar**; si aparece **Abrir como app**, activalo. La app detecta la instalacion y oculta la tarjeta cuando se abre en su propia ventana. La direccion actual `http://192.168.0.6:3000` permite ver canales, pero no es un origen seguro para un service worker. Un acceso directo agregado desde HTTP no equivale a la PWA completa.
+
+El service worker solo conserva una lista explicita de archivos estaticos. No guarda respuestas de `/api/`, cuentas, catalogos, listas HLS, segmentos ni credenciales. Si el servidor no responde al abrir la app, muestra una pantalla sin conexion con **Volver a intentar**. Esto no permite ver TV sin internet. La sesion sigue caducando a las ocho horas; reinstalar o abrir desde otro origen puede requerir iniciar sesion otra vez.
+
+Las actualizaciones se preparan en segundo plano. Cuando hay una version esperando, aparece **Actualizar app**, que recarga la pagina y detiene el video tras pulsarlo. Al modificar archivos precargados, incrementa el nombre de `CACHE` en `public/sw.js`.
+
+### HTTPS con certificados propios
+
+El servidor admite HTTPS directo mediante dos variables. Usa un certificado valido para el dominio o IP que se abrira, con su clave privada. Para pruebas locales, la autoridad emisora debe estar expresamente instalada y ser de confianza en cada dispositivo; aceptar una advertencia de certificado no garantiza que el service worker funcione.
+
+```powershell
+$env:TLS_KEY_FILE = 'D:\ruta\privada\clave.pem'
+$env:TLS_CERT_FILE = 'D:\ruta\privada\certificado.pem'
+npm.cmd start
+```
+
+Con esas variables, el mismo puerto sirve HTTPS en lugar de HTTP. El navegador y la cookie usan HTTPS; las peticiones al proveedor conservan el protocolo que este ofrezca. `iniciar.cmd` queda para la prueba HTTP: para HTTPS usa `npm.cmd start`. No se generan ni instalan certificados automaticamente ni se modifica el dominio o router. `certs/` y los formatos habituales de claves/certificados estan excluidos de Git. Para volver a HTTP, elimina las dos variables del entorno antes de iniciar. La configuracion de un dominio y su certificado real sigue pendiente.
+
+Referencias: [instalacion PWA y origen seguro](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Guides/Making_PWAs_installable), [Safari en iPhone](https://support.apple.com/guide/iphone/bookmark-a-website-iph42ab2f3a7/ios).
 
 ## Qué incluye
 
@@ -66,6 +88,7 @@ Esta fase usa HTTP en la red local. Utiliza una red de confianza. La instalació
 - hls.js completo como primera opcion, con MSE o ManagedMediaSource en Safari compatible. HLS nativo como respaldo cuando esas APIs no estan disponibles.
 - Video, listas HLS anidadas, segmentos, claves AES y rangos de bytes a través del servidor local.
 - URLs opacas en el navegador; las credenciales del proveedor permanecen en memoria del servidor.
+- Identidad de segmentos estable aunque cambien las firmas de la query: ruta HMAC por sesion y token opaco separado para cada URL completa. Las URLs firmadas no se mezclan ni se exponen.
 - Sesiones separadas por navegador, cookie HttpOnly/SameSite y caducidad de 8 horas.
 - Desconexión que invalida la sesión y cancela sus conexiones de video.
 - Protección contra solicitudes cruzadas y contra acceso del proxy a direcciones privadas. El proveedor debe ser accesible por una dirección pública. Las pruebas usan un mock privado habilitado únicamente en su proceso.
@@ -79,6 +102,8 @@ Esta fase usa HTTP en la red local. Utiliza una red de confianza. La instalació
 - En iPhone, ManagedMediaSource requiere Safari/iOS compatible (17.1 o superior); este modo desactiva la reproduccion remota para habilitar esa API. Versiones anteriores recurren al HLS nativo y pueden mantener la limitacion de HEVC en TS. Referencia: [WebKit sobre Safari 17.1](https://webkit.org/blog/14735/webkit-features-in-safari-17-1/).
 - Si el audio avanza sin imagen durante 12 segundos de reproduccion, la interfaz avisa; no presenta esa situacion como reproduccion de video correcta.
 - Ante errores fatales de red, hls.js intenta reconectar dos veces; los errores multimedia tienen un intento de recuperacion. Si falla, aparece Reintentar con una explicacion del fallo. Detener o cambiar canal cancela las reconexiones pendientes.
+- La recuperacion de segmentos/listas conserva el buffer y el decodificador; solo vuelve a cargar la fuente completa si falla el manifiesto inicial. El presupuesto de intentos se renueva tras 30 segundos de reproduccion estable con avance real.
+- Si la lista del proveedor presenta inconsistencias y hay una variante H.264 con el mismo nombre base, aparece Probar version H.264. Se comprobo GOL BOL 1 HD - h264 en este PC durante 35 segundos sin pausas ni cuadros perdidos; las otras fuentes y periodos mas largos dependen del proveedor. El cambio es voluntario.
 - Para una Samsung compatible con AirPlay, se puede probar Duplicar pantalla desde el Centro de control del iPhone con ambos en la misma red. Esta version no integra envio directo a la TV; la duplicacion del video concreto requiere comprobarse en los dispositivos fisicos.
 - Para evitar CORS y URLs con credenciales en el navegador, **todo el video de tu proveedor pasa por el PC**. La subida de su conexión limita la reproducción fuera del equipo; no es todavía la arquitectura de producción propuesta.
 - La API y el video están aislados por sesión; no hay cuentas propias de la app ni controles para publicarla en internet. No expongas esta versión por un router o túnel.

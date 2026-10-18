@@ -8,7 +8,7 @@
     "start": "node server.mjs",
     "dev": "node --watch server.mjs",
     "test": "node --test test/*.test.mjs",
-    "check": "node --check server.mjs && node --check lib/provider.mjs && node --check public/app.js"
+    "check": "node --check server.mjs && node --check lib/provider.mjs && node --check public/app.js && node --check public/pwa.js && node --check public/sw.js"
   },
   "dependencies": {
     "hls.js": "1.6.16",

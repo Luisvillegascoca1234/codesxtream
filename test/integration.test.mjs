@@ -7,6 +7,7 @@ import { normalizeProvider, rewriteManifest } from '../lib/provider.mjs';
 
 let provider, app, secureApp, origin, secureOrigin, providerOrigin;
 let upstreamClosed = false;
+let rotatingPlaylist = 0;
 const listen = async server => { server.listen(0, '127.0.0.1'); await once(server, 'listening'); return `http://127.0.0.1:${server.address().port}`; };
 const post = (base, route, data, cookie, headers = {}) => fetch(`${base}/api/${route}`, { method: 'POST', headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}), ...headers }, body: JSON.stringify(data) });
 const login = async (base = origin, overrides = {}) => {
@@ -17,6 +18,12 @@ const login = async (base = origin, overrides = {}) => {
 before(async () => {
   provider = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost');
+    if (url.pathname === '/hls/rotating.m3u8') {
+      const version = ++rotatingPlaylist;
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+      return res.end(`#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:7\n#EXTINF:5,\nsigned.ts?signature=first-${version}\n#EXTINF:5,\nsigned.ts?signature=second-${version}\n`);
+    }
+    if (url.pathname === '/hls/signed.ts') { res.setHeader('Content-Type', 'video/mp2t'); return res.end(url.searchParams.get('signature')); }
     if (url.pathname === '/player_api.php') {
       res.setHeader('Content-Type', 'application/json');
       if (url.searchParams.get('password') !== 'test-password') return res.end(JSON.stringify({ user_info: { auth: 0 } }));
@@ -56,12 +63,36 @@ before(async () => {
   });
   providerOrigin = await listen(provider);
   // Private origins are enabled only for this in-process mock, never the normal app.
-  app = createApp({ allowPrivate: true, defaultProvider: providerOrigin, freeChannels: [{ id: 'france24-es', name: 'France 24 Español', source: 'https://www.france24.com/es/en-vivo', url: `${providerOrigin}/live/test-user/test-password/101.m3u8` }] }); origin = await listen(app);
+  app = createApp({ allowPrivate: true, defaultProvider: providerOrigin, freeChannels: [{ id: 'france24-es', name: 'France 24 Español', source: 'https://www.france24.com/es/en-vivo', url: `${providerOrigin}/live/test-user/test-password/101.m3u8` }, { id: 'rotating', name: 'Firmas rotatorias', url: `${providerOrigin}/hls/rotating.m3u8` }] }); origin = await listen(app);
   secureApp = createApp(); secureOrigin = await listen(secureApp);
 });
 after(async () => {
   for (const server of [app, secureApp, provider]) {
     server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('serves PWA manifest, worker, offline page and correctly sized PNG icons', async () => {
+  const root = await (await fetch(origin)).text();
+  assert.match(root, /rel="manifest" href="\/manifest.webmanifest"/);
+  assert.match(root, /rel="apple-touch-icon"/);
+  const response = await fetch(origin + '/manifest.webmanifest');
+  assert.match(response.headers.get('content-type'), /application\/manifest\+json/);
+  const manifest = await response.json();
+  assert.equal(manifest.display, 'standalone');
+  assert.equal(manifest.start_url, '/');
+  for (const icon of [...manifest.icons, { src: '/icons/apple-touch-icon.png', sizes: '180x180' }]) {
+    const image = await fetch(origin + icon.src);
+    assert.equal(image.status, 200);
+    assert.equal(image.headers.get('content-type'), 'image/png');
+    const png = Buffer.from(await image.arrayBuffer());
+    assert.equal(png.subarray(1, 4).toString(), 'PNG');
+    assert.equal(`${png.readUInt32BE(16)}x${png.readUInt32BE(20)}`, icon.sizes);
+  }
+  for (const route of ['/sw.js', '/pwa.js', '/offline.html']) {
+    const result = await fetch(origin + route);
+    assert.equal(result.status, 200);
+    assert.equal(result.headers.get('cache-control'), 'no-cache');
   }
 });
 
@@ -101,7 +132,7 @@ test('proxies redirects, nested HLS, encryption keys, init maps and byte ranges 
   const { cookie } = await login();
   await fetch(origin + '/api/catalog', { headers: { cookie } });
   const playback = await (await post(origin, 'play', { channelId: '101' }, cookie)).json();
-  assert.match(playback.url, /^\/api\/media\/[a-f0-9]{48}$/);
+  assert.match(playback.url, /^\/api\/media\/[a-f0-9]{48}\?r=[a-f0-9]{48}$/);
   const master = await (await fetch(origin + playback.url, { headers: { cookie } })).text();
   assert.ok(!master.includes('test-password')); assert.ok(!master.includes('127.0.0.1'));
   const levelPath = master.split('\n').find(line => line.startsWith('/api/media/'));
@@ -152,7 +183,7 @@ test('free live TV works without credentials and stays separate from private acc
   assert.equal(playback.status, 200);
   assert.equal(playback.headers.get('set-cookie'), null);
   const data = await playback.json();
-  assert.match(data.url, /^\/api\/free\/media\/[a-f0-9]{48}$/);
+  assert.match(data.url, /^\/api\/free\/media\/[a-f0-9]{48}\?r=[a-f0-9]{48}$/);
   assert.equal(data.channel.name, 'France 24 Español');
   const master = await (await fetch(origin + data.url)).text();
   assert.ok(!master.includes('test-password'));
@@ -167,6 +198,26 @@ test('free live TV works without credentials and stays separate from private acc
   assert.deepEqual(await (await fetch(origin + '/api/session')).json(), { account: null });
   assert.equal((await post(origin, 'free/play', { channelId: 'http://127.0.0.1/private' })).status, 404);
   assert.equal((await post(origin, 'free/play', { channelId: 'france24-es' }, null, { Origin: 'https://unrelated.example' })).status, 403);
+});
+
+test('preserves HLS path identity across query rotation without merging distinct resources', async () => {
+  const playback = await (await post(origin, 'free/play', { channelId: 'rotating' })).json();
+  const paths = async () => (await (await fetch(origin + playback.url)).text()).split('\n').filter(line => line.startsWith('/api/free/media/'));
+  const first = await paths(); const second = await paths();
+  const urls = [...first, ...second].map(path => new URL(path, origin));
+  assert.ok(urls.every(url => url.pathname === urls[0].pathname));
+  assert.equal(new Set(urls.map(url => url.search)).size, 4);
+  for (const url of urls) {
+    assert.match(url.search, /^\?r=[a-f0-9]{48}$/);
+    assert.ok(!url.href.includes('signature'));
+  }
+  const bodies = await Promise.all(urls.map(async url => (await fetch(url)).text()));
+  assert.equal(new Set(bodies).size, 4);
+  assert.match(bodies[0], /^first-/); assert.match(bodies[1], /^second-/);
+  const wrongPath = new URL(first[0], origin); wrongPath.pathname = new URL(playback.url, origin).pathname;
+  assert.equal((await fetch(wrongPath)).status, 404);
+  const noResource = new URL(first[0], origin); noResource.search = '';
+  assert.equal((await fetch(noResource)).status, 404);
 });
 
 test('uses the preconfigured provider when login only supplies credentials', async () => {
