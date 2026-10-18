@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*.log
+test-results/
+playwright-report/
+.playwright-mcp/
+.local-runtime.json
+.iphone-firewall-backup.json
+.iphone-firewall-result.json
