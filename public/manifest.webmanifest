@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "XtremeVille · TV en vivo",
+  "name": "XtremeVille · TV, películas y series",
   "short_name": "XtremeVille",
-  "description": "Tus canales de TV en vivo, a un toque.",
+  "description": "Tu TV en vivo, películas y series, a un toque.",
   "lang": "es",
   "start_url": "/",
   "scope": "/",

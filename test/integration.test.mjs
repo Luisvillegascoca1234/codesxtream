@@ -8,6 +8,8 @@ import { normalizeProvider, rewriteManifest } from '../lib/provider.mjs';
 let provider, app, secureApp, origin, secureOrigin, providerOrigin;
 let upstreamClosed = false;
 let rotatingPlaylist = 0;
+let artworkFetches = 0;
+const imagePng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j5ZkAAAAASUVORK5CYII=', 'base64');
 const listen = async server => { server.listen(0, '127.0.0.1'); await once(server, 'listening'); return `http://127.0.0.1:${server.address().port}`; };
 const post = (base, route, data, cookie, headers = {}) => fetch(`${base}/api/${route}`, { method: 'POST', headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}), ...headers }, body: JSON.stringify(data) });
 const login = async (base = origin, overrides = {}) => {
@@ -18,6 +20,11 @@ const login = async (base = origin, overrides = {}) => {
 before(async () => {
   provider = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost');
+    if (url.pathname === '/art/logo.png') { artworkFetches++; res.setHeader('Content-Type', 'image/png'); return res.end(imagePng); }
+    if (url.pathname === '/art/redirect') { res.writeHead(302, { Location: '/art/logo.png' }); return res.end(); }
+    if (url.pathname === '/art/series.svg') { res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8'); return res.end('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="green"/></svg>'); }
+    if (url.pathname === '/art/not-image') { res.setHeader('Content-Type', 'text/html'); return res.end('<html>Not an image</html>'); }
+    if (url.pathname === '/art/oversized.png') { res.setHeader('Content-Type', 'image/png'); return res.end(Buffer.alloc(5 * 1024 * 1024 + 1)); }
     if (url.pathname === '/hls/rotating.m3u8') {
       const version = ++rotatingPlaylist;
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
@@ -28,12 +35,24 @@ before(async () => {
       res.setHeader('Content-Type', 'application/json');
       if (url.searchParams.get('password') !== 'test-password') return res.end(JSON.stringify({ user_info: { auth: 0 } }));
       const action = url.searchParams.get('action');
+      if (action === 'get_vod_categories' || action === 'get_series_categories') return res.end(JSON.stringify([{ category_id: '1', category_name: 'Ficción' }]));
+      if (action === 'get_vod_streams') return res.end(JSON.stringify([
+        { stream_id: 101, name: 'Película MP4', category_id: '1', container_extension: 'mp4', year: '2026', rating: '8.0', direct_source: 'secret', stream_icon: `${providerOrigin}/art/redirect?token=test-password` },
+        { stream_id: 202, name: 'Película HLS', category_id: '1', container_extension: 'm3u8' },
+        { stream_id: 203, name: 'Extensión inválida', container_extension: '../secret' },
+        { stream_id: '../unsafe', name: 'ID inválido' },
+      ]));
+      if (action === 'get_series') return res.end(JSON.stringify([{ series_id: 101, name: 'Serie de prueba', category_id: '1', cover: '/art/series.svg' }]));
+      if (action === 'get_series_info') return res.end(JSON.stringify({ info: { plot: 'Una historia de prueba.', cover: 'secret' }, episodes: {
+        1: [{ id: '301', episode_num: 1, title: 'Piloto', container_extension: 'mp4', info: { duration: '00:42:00', direct_source: 'secret' } }],
+        2: [{ id: '302', season: 2, episode_num: 1, title: 'Regreso', container_extension: 'm3u8' }, { id: '../secret', title: 'Inválido' }],
+      } }));
       if (action === 'get_live_categories') return res.end(JSON.stringify([{ category_id: '1', category_name: 'Pruebas' }]));
       if (action === 'get_live_streams') return res.end(JSON.stringify([
-        { stream_id: 101, name: 'Canal de prueba', category_id: '1', direct_source: 'secret', stream_icon: 'secret' },
-        { stream_id: 102, name: '<script>alert(1)</script>', category_id: '1' },
-        { stream_id: 103, name: 'Manifest inválido', category_id: '1' },
-        { stream_id: 104, name: 'Transmisión larga', category_id: '1' },
+        { stream_id: 101, name: 'Canal de prueba', category_id: '1', direct_source: 'secret', stream_icon: `${providerOrigin}/art/logo.png?token=test-password` },
+        { stream_id: 102, name: '<script>alert(1)</script>', category_id: '1', stream_icon: 'file:///private/image.png' },
+        { stream_id: 103, name: 'Manifest inválido', category_id: '1', stream_icon: '/art/not-image' },
+        { stream_id: 104, name: 'Transmisión larga', category_id: '1', stream_icon: '/art/oversized.png' },
         { stream_id: '../unsafe', name: 'Invalid' },
       ]));
       const username = url.searchParams.get('username');
@@ -42,6 +61,13 @@ before(async () => {
         exp_date: username === 'expired' ? '1' : '0', max_connections: '1', active_cons: '0',
         username, password: 'test-password', allowed_output_formats: ['m3u8', 'ts'],
       }, server_info: { secret: 'not-for-browser' } }));
+    }
+    if (/^\/(movie|series)\/test-user\/test-password\/\d+\.(mp4|m3u8)$/.test(url.pathname)) {
+      if (url.pathname.endsWith('.m3u8')) { res.setHeader('Content-Type', 'application/vnd.apple.mpegurl'); return res.end('#EXTM3U\n#EXTINF:2,\n/hls/segment.ts\n#EXT-X-ENDLIST\n'); }
+      const payload = url.pathname.startsWith('/movie/') ? 'MOVIEDATA' : 'EPISODEDATA';
+      if (req.headers.range) res.writeHead(206, { 'Content-Type': 'video/mp4', 'Content-Range': `bytes 0-3/${payload.length}`, 'Accept-Ranges': 'bytes', 'Content-Length': 4 });
+      else res.writeHead(200, { 'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes', 'Content-Length': payload.length });
+      return res.end(req.headers.range ? payload.slice(0, 4) : payload);
     }
     if (url.pathname.endsWith('/101.m3u8')) { res.writeHead(302, { Location: '/hls/master.m3u8' }); return res.end(); }
     if (url.pathname.endsWith('/103.m3u8')) { res.setHeader('Content-Type', 'video/mp2t'); return res.end('THIS IS NOT HLS'); }
@@ -103,6 +129,22 @@ test('serves the application and locally installed HLS library', async () => {
   }
   assert.deepEqual(await (await fetch(origin + '/api/session')).json(), { account: null });
   assert.equal((await fetch(origin + '/api/catalog')).status, 401);
+});
+
+test('new HTML cannot reuse the unversioned scripts from an older installed app', async () => {
+  const root = await (await fetch(origin)).text();
+  const worker = await (await fetch(origin + '/sw.js')).text();
+  const offline = await (await fetch(origin + '/offline.html')).text();
+  const assets = [...root.matchAll(/(?:src|href)="([^"\s]+\.(?:js|css)(?:\?[^"\s]*)?)"/g)].map(match => match[1]);
+  assert.ok(assets.length >= 4);
+  for (const asset of assets) {
+    // Previously installed workers bypass query strings. An unversioned URL
+    // would instead return old JS with no listeners for the new section buttons.
+    assert.ok(new URL(asset, origin).searchParams.get('v'), `Missing release version: ${asset}`);
+    assert.ok(worker.includes(`'${asset}'`), `Asset missing from the new offline cache: ${asset}`);
+    assert.equal((await fetch(origin + asset)).status, 200);
+  }
+  assert.ok(offline.includes(assets.find(asset => asset.startsWith('/styles.css'))));
 });
 test('rejects credential-bearing URLs and normalizes API suffixes', () => {
   assert.equal(normalizeProvider('https://example.com:443/xtream/player_api.php').href, 'https://example.com/xtream/');
@@ -233,4 +275,133 @@ test('uses the preconfigured provider when login only supplies credentials', asy
   const catalog = await fetch(origin + '/api/catalog', { headers: { cookie } });
   assert.equal(catalog.status, 200);
   assert.equal((await catalog.json()).channels.length, 4);
+});
+
+test('separates live, movie and series IDs and streams VOD with byte ranges through private URLs', async () => {
+  const vodApp = createApp({ allowPrivate: true });
+  const base = await listen(vodApp);
+  try {
+    const { cookie } = await login(base);
+    const headers = { cookie };
+    const movies = await (await fetch(base + '/api/catalog?type=movies', { headers })).json();
+    assert.equal(movies.channels.length, 3);
+    assert.equal(movies.channels[0].year, '2026');
+    assert.ok(!JSON.stringify(movies).includes('secret'));
+    assert.equal((await post(base, 'play', { channelId: '101' }, cookie)).status, 404);
+    assert.equal((await fetch(base + '/api/catalog?type=constructor', { headers })).status, 400);
+    assert.equal((await post(base, 'play', { type: 'movies', channelId: '203' }, cookie)).status, 422);
+    assert.equal((await post(base, 'play', { type: 'movies', channelId: '../secret' }, cookie)).status, 404);
+    await fetch(base + '/api/catalog', { headers });
+    const movie = await (await post(base, 'play', { type: 'movies', channelId: '101' }, cookie)).json();
+    assert.equal(movie.format, 'file');
+    assert.match(movie.url, /^\/api\/media\/[a-f0-9]{48}\?r=[a-f0-9]{48}$/);
+    const range = await fetch(base + movie.url, { headers: { cookie, Range: 'bytes=0-3' } });
+    assert.equal(range.status, 206);
+    assert.equal(range.headers.get('content-range'), 'bytes 0-3/9');
+    assert.equal(await range.text(), 'MOVI');
+    const head = await fetch(base + movie.url, { method: 'HEAD', headers });
+    assert.equal(head.headers.get('content-length'), '9');
+    assert.equal(await head.text(), '');
+    const other = await login(base);
+    assert.equal((await fetch(base + movie.url, { headers: { cookie: other.cookie } })).status, 404);
+    const live = await (await post(base, 'play', { channelId: '101' }, cookie)).json();
+    assert.equal(live.format, 'hls');
+    assert.notEqual(live.url, movie.url);
+    const hls = await (await post(base, 'play', { type: 'movies', channelId: '202' }, cookie)).json();
+    assert.equal(hls.format, 'hls');
+    assert.match(await (await fetch(base + hls.url, { headers })).text(), /\/api\/media\//);
+    await post(base, 'disconnect', {}, cookie);
+    assert.equal((await fetch(base + movie.url, { headers })).status, 401);
+  } finally { vodApp.closeAllConnections(); await new Promise(resolve => vodApp.close(resolve)); }
+});
+
+test('loads series seasons and only plays episodes belonging to a loaded series', async () => {
+  const seriesApp = createApp({ allowPrivate: true });
+  const base = await listen(seriesApp);
+  try {
+    const { cookie } = await login(base);
+    const headers = { cookie };
+    assert.equal((await fetch(base + '/api/series?id=101', { headers })).status, 404);
+    const catalog = await (await fetch(base + '/api/catalog?type=series', { headers })).json();
+    assert.equal(catalog.channels[0].name, 'Serie de prueba');
+    assert.equal((await fetch(base + '/api/series?id=999', { headers })).status, 404);
+    assert.equal((await post(base, 'play', { type: 'episode', channelId: '301', seriesId: '101' }, cookie)).status, 404);
+    const info = await (await fetch(base + '/api/series?id=101', { headers })).json();
+    assert.equal(info.plot, 'Una historia de prueba.');
+    assert.deepEqual(info.episodes.map(episode => episode.season), ['1', '2']);
+    assert.ok(!JSON.stringify(info).includes('secret'));
+    assert.equal((await post(base, 'play', { type: 'episode', channelId: '301', seriesId: '999' }, cookie)).status, 404);
+    const first = await (await post(base, 'play', { type: 'episode', channelId: '301', seriesId: '101' }, cookie)).json();
+    assert.equal(first.format, 'file');
+    assert.equal(await (await fetch(base + first.url, { headers })).text(), 'EPISODEDATA');
+    const second = await (await post(base, 'play', { type: 'episode', channelId: '302', seriesId: '101' }, cookie)).json();
+    assert.equal(second.format, 'hls');
+    const manifest = await (await fetch(base + second.url, { headers })).text();
+    assert.match(manifest, /\/api\/media\//);
+    assert.ok(!manifest.includes('test-password'));
+    assert.equal((await post(base, 'play', { type: 'series', channelId: '101' }, cookie)).status, 404);
+  } finally { seriesApp.closeAllConnections(); await new Promise(resolve => seriesApp.close(resolve)); }
+});
+
+test('serves channel, movie and series artwork without exposing image URLs or sharing sessions', async () => {
+  const imageApp = createApp({ allowPrivate: true });
+  const base = await listen(imageApp);
+  try {
+    const { cookie } = await login(base);
+    const headers = { cookie };
+    const catalogs = {};
+    for (const type of ['live', 'movies', 'series']) {
+      const catalog = await (await fetch(`${base}/api/catalog?type=${type}`, { headers })).json();
+      const text = JSON.stringify(catalog);
+      assert.ok(!text.includes('test-password'));
+      assert.ok(!text.includes(providerOrigin));
+      assert.ok(!text.includes('artworkSource'));
+      catalogs[type] = catalog;
+      assert.equal(catalog.channels[0].artwork, `/api/artwork/${type}/101`);
+    }
+    assert.equal(catalogs.live.channels[1].artwork, null);
+    assert.equal(catalogs.movies.channels[1].artwork, null);
+    const initialFetches = artworkFetches;
+    const logo = await fetch(base + catalogs.live.channels[0].artwork, { headers });
+    assert.equal(logo.status, 200);
+    assert.equal(logo.headers.get('content-type'), 'image/png');
+    assert.equal(logo.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(Buffer.from(await logo.arrayBuffer()), imagePng);
+    const repeat = await fetch(base + catalogs.live.channels[0].artwork, { headers });
+    await repeat.arrayBuffer();
+    assert.equal(artworkFetches, initialFetches + 1);
+    const movie = await fetch(base + catalogs.movies.channels[0].artwork, { headers });
+    assert.equal(movie.status, 200);
+    assert.deepEqual(Buffer.from(await movie.arrayBuffer()), imagePng);
+    const series = await fetch(base + catalogs.series.channels[0].artwork, { headers });
+    assert.equal(series.headers.get('content-type'), 'image/svg+xml');
+    assert.match(series.headers.get('content-security-policy'), /sandbox; default-src 'none'/);
+    assert.match(await series.text(), /<svg/);
+    const head = await fetch(base + '/api/artwork/live/101', { method: 'HEAD', headers });
+    assert.equal(head.headers.get('content-length'), String(imagePng.length));
+    assert.equal(await head.text(), '');
+    assert.equal((await fetch(base + '/api/artwork/live/101')).status, 401);
+    const other = await login(base);
+    assert.equal((await fetch(base + '/api/artwork/live/101', { headers: { cookie: other.cookie } })).status, 404);
+    assert.equal((await fetch(base + '/api/artwork/live/101', { headers: { cookie, 'Sec-Fetch-Site': 'cross-site' } })).status, 403);
+    await post(base, 'disconnect', {}, cookie);
+    assert.equal((await fetch(base + '/api/artwork/live/101', { headers })).status, 401);
+  } finally { imageApp.closeAllConnections(); await new Promise(resolve => imageApp.close(resolve)); }
+});
+
+test('rejects absent, non-image and oversized artwork while leaving the catalog usable', async () => {
+  const imageApp = createApp({ allowPrivate: true });
+  const base = await listen(imageApp);
+  try {
+    const { cookie } = await login(base);
+    const headers = { cookie };
+    await fetch(base + '/api/catalog', { headers });
+    assert.equal((await fetch(base + '/api/artwork/live/999', { headers })).status, 404);
+    assert.equal((await fetch(base + '/api/artwork/live/102', { headers })).status, 404);
+    assert.equal((await fetch(base + '/api/artwork/live/103', { headers })).status, 502);
+    const oversized = await fetch(base + '/api/artwork/live/104', { headers });
+    assert.equal(oversized.status, 502);
+    assert.match((await oversized.json()).error, /tamaño permitido/);
+    assert.equal((await fetch(base + '/api/catalog?type=movies', { headers })).status, 200);
+  } finally { imageApp.closeAllConnections(); await new Promise(resolve => imageApp.close(resolve)); }
 });

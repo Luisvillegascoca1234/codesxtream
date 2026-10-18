@@ -107,3 +107,39 @@ El usuario confirma que Safari no abre la pagina, usando la URL HTTP correcta y 
 Posteriormente se confirmo que el permiso inicial fue instalado. La captura del iPhone confirma IP 192.168.0.199/24 y router 192.168.0.1. La inspeccion con netsh encontro un bloqueo TCP explicito para el mismo ejecutable Node.js (ruta resuelta a traves del junction de fnm).
 
 Se aplico la reparacion acotada mediante el permiso de administrador de Windows. Resultado `ok: true`. Netsh confirma bloqueo original en puertos 1-2999,3001-65535 y dos bloqueos complementarios de TCP 3000 para otros origenes/destinos. Se comprobo matematicamente la cobertura IPv4 (todas las direcciones excepto un host) e IPv6 completa de las reglas instaladas. HTTP local sigue correcto. No se modificaron perfil de red, router, Raspberry ni DNS. El usuario confirmo despues del ajuste: «Si, ya abre la app». Acceso desde Safari en iPhone verificado por el usuario. Siguen pendientes la conexion al proveedor real y la reproduccion de sus canales.
+
+## Películas y series · 18 de octubre de 2026
+
+Rama `codex/peliculas-y-series`. Se agregaron apartados para películas y series, con categorías, búsqueda, favoritos separados y carga incremental; Series incluye sinopsis, temporadas, episodios y reintento de consultas fallidas. TV en vivo conserva su catálogo y el mecanismo de recuperación HLS. Los archivos VOD utilizan el reproductor nativo y el proxy privado con soporte de rangos de bytes.
+
+- `npm.cmd run check`: correcto.
+- `npm.cmd test`: 20 pruebas aprobadas. Las nuevas comprobaciones cubren IDs compartidos entre TV y películas, reproducción de archivos y HLS, rangos y HEAD, aislamiento entre sesiones, desconexión, rechazo de IDs/extensiones inválidos, pertenencia de episodios y selección del motor nativo para archivos VOD.
+- Chrome automatizado con API simulada: categorías, búsqueda, carga de 48 a 60 títulos, favoritos por apartado y persistencia al recargar, selección de temporadas, reintento tras error y solicitud del episodio correcto. Los metadatos con HTML se muestran como texto.
+- Navegación comprobada a 1440, 768 y 390 píxeles, sin desbordamiento horizontal ni errores JavaScript. Las respuestas lentas de otro apartado no reemplazan el catálogo visible. El ejemplo funciona sin cuenta para películas, series y temporadas.
+- Capturas y script de verificación en `test-results/`, excluido de Git. Caché PWA incrementada a `xtremeville-static-v7`.
+
+La disponibilidad y reproducción de películas y episodios del proveedor real siguen pendientes de comprobación con la cuenta del usuario. Estas pruebas usan datos simulados; no confirman compatibilidad de todos los contenedores/códecs ni reproducción en un iPhone físico. No se añade transcodificación.
+
+### Botones de Películas y Series sin respuesta
+
+El usuario precisó que los botones no respondían. Se encontró una pestaña de Chrome con la interfaz anterior, todavía titulada «XtremeVille · TV en vivo». Además, el HTML nuevo solicitaba `/app.js` sin versión: un service worker antiguo podía devolver el código previo, que no registra los botones `data-section`. Las pruebas anteriores de navegador bloqueaban el service worker y no cubrían esa actualización.
+
+Se versionaron scripts y estilos con `?v=8`, lo que evita las respuestas de los workers antiguos para esas rutas. La caché v8 conserva la ruta y la query completas; no recurre a archivos sin versión y mantiene todas las rutas `/api/` fuera de caché. El HTML y la pantalla sin conexión referencian los mismos recursos precargados. No se reinició el servidor ni se eliminaron sesiones para este arreglo.
+
+La prueba de regresión falló antes del arreglo por `/styles.css` sin versión y pasó después. `npm.cmd run check` correcto y 23 pruebas aprobadas, incluyendo coincidencia de versiones y exclusión de APIs. En Chrome conectado se comprobó Películas con seis ejemplos, el cambio a Series y la apertura de temporadas y episodios. No hubo errores de JavaScript. Captura de esa comprobación: `test-results/botones-series-corregidos.png` (contenido ficticio). Se recargó la pestaña de red local del usuario, que quedó en el formulario de inicio de sesión.
+
+### Indicadores de carga
+
+Se añadieron ocho tarjetas skeleton para TV, películas y series, junto a un spinner y un texto de estado. Mientras se consulta el catálogo, se ocultan los resultados anteriores y el estado vacío, se deshabilitan búsqueda/categorías y se marca el contenido con `aria-busy`. Cambiar de apartado cancela visualmente la carga anterior; una respuesta atrasada no elimina el indicador de la consulta vigente. Los episodios tienen un spinner propio, que se retira al recibir resultados, fallar la consulta o cerrar la ventana. Las animaciones respetan la preferencia de reducir movimiento.
+
+Recursos y caché PWA actualizados a v9. `npm.cmd run check` correcto y 23 pruebas aprobadas. En Chrome, con un servidor temporal de datos simulados y ocho segundos de demora, se verificaron skeletons visibles, estado vacío oculto y `aria-busy=true`; al llegar el catálogo se restauraron resultados y controles con `aria-busy=false`. Se capturó el spinner de episodios. Evidencias locales: `test-results/skeleton-peliculas.png` y `test-results/spinner-episodios.png`. No se reinicia el servidor habitual ni se usan cuentas reales para esta comprobación.
+
+### Logos y portadas
+
+El catálogo ahora conserva `stream_icon`, `cover` y `cover_big` únicamente en el servidor y devuelve rutas locales de imágenes para cada tipo e identificador. El proxy requiere una sesión con ese título en su catálogo, valida las redirecciones y limita cada imagen a 5 MiB. Solo admite tipos de imagen y aplica sandbox a SVG. La caché se mantiene en memoria durante cinco minutos y está limitada a 128 imágenes/8 MiB por sesión; las respuestas conservan `no-store` y quedan fuera del service worker.
+
+Las tarjetas usan carga diferida y decodificación asíncrona. Se mantienen iniciales cuando no hay imagen o falla su descarga, y las URLs fallidas se reintentan al actualizar el catálogo. Las películas y series tienen proporción 2:3; los canales muestran el logo completo. El avatar del reproductor usa la imagen seleccionada, incluyendo la portada de la serie al elegir un episodio. Las imágenes no interceptan los botones de las tarjetas.
+
+`npm.cmd run check` correcto y 25 pruebas aprobadas. Las nuevas pruebas verifican imágenes de los tres apartados, URLs originales ocultas, imágenes relativas, redirecciones, caché en memoria, HEAD, aislamiento de sesiones, desconexión, rechazo de solicitudes cruzadas, esquemas no admitidos, respuestas HTML y tamaño excesivo. El service worker excluye explícitamente las rutas de portadas en su prueba. Recursos y caché PWA incrementados a v10.
+
+Chrome con un proveedor local simulado: cuatro imágenes cargadas y dos alternativas (una ausente y una con error) en cada apartado. Se comprobaron favoritos con portadas, apertura de series al pulsar su tarjeta y ausencia de errores JavaScript. Captura de películas: `test-results/portadas-peliculas.png`; las portadas de esa captura son de prueba. Pendiente comprobar las imágenes concretas del proveedor real tras iniciar sesión.

@@ -8,19 +8,21 @@
   <meta name="apple-mobile-web-app-title" content="XtremeVille">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="description" content="Tu espacio para probar TV en vivo con tu cuenta Xtream Codes.">
+  <meta name="description" content="Tu TV en vivo, películas y series con tu cuenta Xtream Codes.">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180">
-  <link rel="stylesheet" href="/styles.css">
-  <title>XtremeVille · TV en vivo</title>
-  <script src="/vendor/hls.min.js" defer></script>
-  <script src="/app.js" defer></script>
-  <script src="/pwa.js" defer></script>
+  <link rel="stylesheet" href="/styles.css?v=10">
+  <title>XtremeVille · TV, películas y series</title>
+  <script src="/vendor/hls.min.js?v=10" defer></script>
+  <script src="/app.js?v=10" defer></script>
+  <script src="/pwa.js?v=10" defer></script>
 </head>
 <body>
   <svg class="svg-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
     <symbol id="i-tv" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="13" rx="3"/><path d="M8 22h8M12 18v4m-4-21 4 4 4-4"/></symbol>
+    <symbol id="i-film" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 3v18M17 3v18M3 8h4m-4 8h4M17 8h4m-4 8h4M7 12h10"/></symbol>
+    <symbol id="i-series" viewBox="0 0 24 24"><rect x="3" y="8" width="18" height="13" rx="2"/><path d="M5 5h14M8 2h8m-6 10 5 3-5 3Z"/></symbol>
     <symbol id="i-play" viewBox="0 0 24 24"><path d="m9 5 11 7-11 7Z"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
     <symbol id="i-heart" viewBox="0 0 24 24"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></symbol>
@@ -41,8 +43,10 @@
     <a class="brand" href="/" aria-label="XtremeVille, inicio"><span class="brand-mark">x<span>v</span></span><span>Xtreme<span class="brand-light">Ville</span><small>STREAMING PERSONAL</small></span></a>
     <div class="nav-label">TU ESPACIO</div>
     <nav aria-label="Navegación principal">
-      <button class="nav-item active" data-view="all"><svg><use href="#i-tv"/></svg><span>TV en vivo</span><span class="nav-dot"></span></button>
-      <button class="nav-item" data-view="favorites"><svg><use href="#i-heart"/></svg><span>Favoritos</span><span id="favorite-count" class="nav-count">0</span></button>
+      <button class="nav-item active" data-section="live" aria-label="TV en vivo" aria-pressed="true" title="TV en vivo"><svg><use href="#i-tv"/></svg><span>TV en vivo</span><span class="nav-dot"></span></button>
+      <button class="nav-item" data-section="movies" aria-label="Películas" aria-pressed="false" title="Películas"><svg><use href="#i-film"/></svg><span>Películas</span></button>
+      <button class="nav-item" data-section="series" aria-label="Series" aria-pressed="false" title="Series"><svg><use href="#i-series"/></svg><span>Series</span></button>
+      <button class="nav-item" data-view="favorites" aria-label="Favoritos del apartado actual" aria-pressed="false" title="Favoritos del apartado actual"><svg><use href="#i-heart"/></svg><span>Favoritos</span><span id="favorite-count" class="nav-count">0</span></button>
     </nav>
     <div class="sidebar-separator"></div>
     <div class="nav-label">CONEXIÓN</div>
@@ -62,6 +66,7 @@
     </header>
 
     <main>
+      <nav class="section-tabs" aria-label="Apartados del catálogo"><button class="active" data-section="live" aria-pressed="true"><svg><use href="#i-tv"/></svg>TV en vivo</button><button data-section="movies" aria-pressed="false"><svg><use href="#i-film"/></svg>Películas</button><button data-section="series" aria-pressed="false"><svg><use href="#i-series"/></svg>Series</button></nav>
       <section class="page-heading"><div><p class="eyebrow">DALE PLAY A TU MOMENTO</p><h1 id="page-title">Tu TV. A tu manera<span>.</span></h1><p class="page-description" id="page-description">Todos tus canales, un solo lugar. Tú eliges qué ver.</p></div><button class="button button-secondary" id="refresh-button"><svg><use href="#i-refresh"/></svg>Actualizar</button></section>
 
       <section class="install-card" id="install-card" aria-label="Instalar XtremeVille">
@@ -81,12 +86,12 @@
       <section class="watch-layout" aria-label="Reproducción y conexión">
         <div class="player-card">
           <div class="player-screen" id="player-screen">
-            <div class="player-top"><span class="live-badge"><span></span> TV EN VIVO</span><span class="player-top-label" id="player-top-label">TU PRÓXIMO CANAL FAVORITO</span></div>
-            <video id="video" controls playsinline preload="none" hidden aria-label="Reproductor de TV en vivo"></video>
-            <div class="player-placeholder" id="player-placeholder"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><div class="orbit orbit-three"></div><div class="player-center"><span class="play-emblem"><svg><use href="#i-play"/></svg></span><h2>La mejor vista empieza aquí.</h2><p>Conecta tu proveedor y elige un canal.<br>Tu pantalla ya está lista.</p><button class="button button-primary" id="player-connect">Conectar proveedor<svg><use href="#i-arrow"/></svg></button></div><div class="screen-foot"><span>LIVE / ON YOUR TERMS</span><span>01 — ∞</span></div></div>
+            <div class="player-top"><span class="live-badge" id="player-badge">LISTO PARA REPRODUCIR</span><span class="player-top-label" id="player-top-label">TU PRÓXIMO MOMENTO FAVORITO</span></div>
+            <video id="video" controls playsinline preload="none" hidden aria-label="Reproductor de contenido"></video>
+            <div class="player-placeholder" id="player-placeholder"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><div class="orbit orbit-three"></div><div class="player-center"><span class="play-emblem"><svg><use href="#i-play"/></svg></span><h2>La mejor vista empieza aquí.</h2><p>Conecta tu proveedor y elige qué ver.<br>Tu pantalla ya está lista.</p><button class="button button-primary" id="player-connect">Conectar proveedor<svg><use href="#i-arrow"/></svg></button></div><div class="screen-foot"><span>PLAY / ON YOUR TERMS</span><span>01 — ∞</span></div></div>
             <div class="player-loading" id="player-loading" hidden><span class="spinner"></span><span>Abriendo transmisión…</span></div>
           </div>
-          <div class="now-playing"><div class="channel-avatar small" id="playing-avatar"><svg><use href="#i-tv"/></svg></div><div class="now-playing-text"><strong id="playing-name">Nada en reproducción</strong><span id="playing-detail">Elige un canal para comenzar</span></div><button class="icon-button" id="stop-button" aria-label="Detener reproducción" title="Detener reproducción" disabled><svg><use href="#i-close"/></svg></button><button class="icon-button" id="fullscreen-button" aria-label="Pantalla completa" title="Pantalla completa" disabled><svg><use href="#i-expand"/></svg></button></div>
+          <div class="now-playing"><div class="channel-avatar small" id="playing-avatar"><svg><use href="#i-tv"/></svg></div><div class="now-playing-text"><strong id="playing-name">Nada en reproducción</strong><span id="playing-detail">Elige qué ver para comenzar</span></div><button class="icon-button" id="stop-button" aria-label="Detener reproducción" title="Detener reproducción" disabled><svg><use href="#i-close"/></svg></button><button class="icon-button" id="fullscreen-button" aria-label="Pantalla completa" title="Pantalla completa" disabled><svg><use href="#i-expand"/></svg></button></div>
           <div id="playback-error" class="inline-error player-error" role="alert" hidden></div>
           <div id="playback-suggestion" class="catalog-message playback-suggestion" role="status" hidden><span>Esta señal presenta inconsistencias. Puedes probar otra versión del mismo canal.</span><button class="button button-secondary" id="alternative-button">Probar versión H.264</button></div>
         </div>
@@ -95,7 +100,7 @@
           <div class="card-heading"><span class="eyebrow">TU CONEXIÓN</span><svg><use href="#i-link"/></svg></div>
           <div class="connection-status" id="connection-status"><span class="status-light"></span><span>Sin proveedor conectado</span></div>
           <h2 id="connection-title">Tu cuenta.<br> Tu contenido.</h2>
-          <p id="connection-description">Usa los datos que te entregó tu proveedor Xtream Codes para cargar tus canales.</p>
+          <p id="connection-description">Usa los datos que te entregó tu proveedor Xtream Codes para cargar tu contenido.</p>
           <dl class="connection-details" id="connection-details" hidden></dl>
           <button class="button button-primary full-width" id="connect-button">Configurar conexión<svg><use href="#i-arrow"/></svg></button>
           <button class="disconnect-button" id="disconnect-button" hidden><svg><use href="#i-exit"/></svg>Desconectar cuenta</button>
@@ -105,11 +110,15 @@
 
       <section class="catalog-section" aria-labelledby="catalog-title">
         <div class="catalog-heading"><div><h2 id="catalog-title">Explora tus canales <span id="channel-count">0</span></h2><p id="catalog-description">Un mundo por descubrir, a un clic de distancia.</p></div><label class="search"><svg><use href="#i-search"/></svg><input type="search" id="search" placeholder="Buscar un canal…" aria-label="Buscar un canal" autocomplete="off"><kbd>/</kbd></label></div>
-        <div class="filters-row"><div id="categories" class="categories" aria-label="Filtrar por categoría"><button class="category active" data-category="all" aria-pressed="true">Todos los canales</button></div><button class="category mobile-favorites" id="mobile-favorites" aria-pressed="false"><svg><use href="#i-heart"/></svg>Favoritos</button><span class="display-label"><svg><use href="#i-grid"/></svg> VISTA DE CANALES</span></div>
+        <div class="filters-row"><div id="categories" class="categories" aria-label="Filtrar por categoría"><button class="category active" data-category="all" aria-pressed="true">Todos los canales</button></div><button class="category mobile-favorites" id="mobile-favorites" aria-pressed="false"><svg><use href="#i-heart"/></svg>Favoritos</button><span class="display-label"><svg><use href="#i-grid"/></svg> <span id="display-label">VISTA DE CANALES</span></span></div>
         <div class="catalog-message" id="catalog-message" role="status" hidden></div>
+        <div class="loading-status" id="catalog-loading" role="status" hidden><span class="spinner" aria-hidden="true"></span><span id="catalog-loading-text">Cargando tu contenido…</span></div>
+        <div id="catalog-content" aria-busy="false">
+        <div class="channel-grid catalog-skeleton" id="catalog-skeleton" aria-hidden="true" hidden></div>
         <div class="empty-state" id="empty-state"><div class="empty-icon"><svg><use href="#i-tv"/></svg><span>+</span></div><h3>Tu parrilla está por llegar</h3><p>Conecta tu cuenta para ver los canales disponibles.<br>O explora la interfaz con un catálogo de ejemplo.</p><div class="empty-actions"><button class="button button-secondary" id="demo-button">Explorar ejemplo<svg><use href="#i-arrow"/></svg></button><span>Sin credenciales · Datos ficticios</span></div></div>
         <div class="channel-grid" id="channel-grid" hidden></div>
         <button class="button button-secondary load-more" id="load-more" hidden>Mostrar más canales</button>
+        </div>
       </section>
       <footer class="main-footer"><span><span class="footer-dot"></span> Tu contenido se reproduce desde tu proveedor a través de este PC.</span><span>DISEÑADO PARA DISFRUTAR.</span></footer>
     </main>
@@ -126,12 +135,24 @@
       <div class="provider-preset"><svg><use href="#i-link"/></svg><span>Servidor preconfigurado<strong id="provider-display">http://121212.io:80</strong></span></div>
       <details class="provider-settings" id="provider-settings"><summary>Cambiar servidor</summary><label class="field">URL del servidor<input id="provider-url" name="url" type="url" value="http://121212.io:80" placeholder="https://servidor:puerto" required autocomplete="off" spellcheck="false" autocapitalize="none"><small>Dirección base, sin parámetros ni credenciales.</small></label></details>
       <div class="inline-error" id="connect-error" role="alert" hidden></div>
-      <button type="submit" class="button button-primary full-width" id="connect-submit">Entrar y cargar canales<svg><use href="#i-arrow"/></svg></button>
+      <button type="submit" class="button button-primary full-width" id="connect-submit">Entrar y cargar contenido<svg><use href="#i-arrow"/></svg></button>
       <p class="form-note"><svg><use href="#i-info"/></svg><span id="transport-note">El servidor preconfigurado usa HTTP: las credenciales viajan sin cifrar hasta el proveedor. No se guardan en archivos.</span></p>
     </form>
   </dialog>
 
   <dialog id="help-dialog" aria-labelledby="help-title"><div class="dialog-heading"><div class="dialog-icon"><svg><use href="#i-device"/></svg></div><button class="icon-button" data-close="help-dialog" aria-label="Cerrar ayuda"><svg><use href="#i-close"/></svg></button></div><p class="eyebrow">DE TU ESCRITORIO A TU BOLSILLO</p><h2 id="help-title">Pruébalo en tu iPhone<span>.</span></h2><ol class="help-steps"><li>Conecta el iPhone al mismo wifi o red doméstica que este PC.</li><li>En Safari, abre la dirección de red local que aparece en la consola al iniciar la app. No uses localhost en el iPhone.</li><li>Introduce tus credenciales y elige un canal. Cada dispositivo inicia su propia sesión.</li></ol><p class="form-note">Mantén el PC encendido y el servidor abierto. Si no carga, revisa el permiso de Node.js en el firewall de Windows para redes privadas.</p><div class="help-callout"><strong>Una transmisión a la vez</strong><p>Si tu cuenta permite una sola conexión, detén el video del PC antes de reproducir en el iPhone.</p></div><p class="form-note">La prueba utiliza HTTP local. El acceso por dominio y la instalación completa como app se preparan con HTTPS en la siguiente etapa.</p></dialog>
+  <dialog id="series-dialog" class="series-dialog" aria-labelledby="series-title">
+    <div class="dialog-heading"><div class="dialog-icon"><svg><use href="#i-series"/></svg></div><button class="icon-button" data-close="series-dialog" aria-label="Cerrar serie"><svg><use href="#i-close"/></svg></button></div>
+    <p class="eyebrow">TEMPORADAS Y EPISODIOS</p><h2 id="series-title">Serie</h2>
+    <p class="dialog-description series-plot" id="series-plot"></p>
+    <div class="loading-status series-loading" id="series-loading" role="status" hidden><span class="spinner" aria-hidden="true"></span><span>Cargando temporadas y episodios…</span></div>
+    <div class="catalog-message" id="series-status" role="status" hidden></div>
+    <button class="button button-secondary" id="series-retry" hidden>Reintentar</button>
+    <div id="series-content" aria-busy="false">
+    <label class="field season-field" id="season-field" hidden>Temporada<select id="season-select"></select></label>
+    <div class="episode-list" id="episode-list"></div>
+    </div>
+  </dialog>
   <div id="toast" class="toast" role="status" hidden></div>
   <dialog id="install-dialog" aria-labelledby="install-title">
     <div class="dialog-heading"><div class="dialog-icon"><svg><use href="#i-device"/></svg></div><button class="icon-button" id="close-install" aria-label="Cerrar instalación"><svg><use href="#i-close"/></svg></button></div>

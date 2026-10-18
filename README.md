@@ -1,6 +1,6 @@
 # XtremeVille · prueba local
 
-Aplicación para conectar una cuenta Xtream Codes, consultar canales de TV en vivo y probar reproducción HLS desde PC o Safari en iPhone. Node.js 22 o superior. Compatible con Windows y con una futura instalación en Raspberry Pi que tenga esa versión de Node.
+Aplicación para conectar una cuenta Xtream Codes y explorar TV en vivo, películas y series desde PC o Safari en iPhone. Reproduce HLS y archivos de video compatibles con el navegador. Node.js 22 o superior. Compatible con Windows y con una futura instalación en Raspberry Pi que tenga esa versión de Node.
 
 ## Iniciar
 
@@ -13,7 +13,7 @@ Abre **http://localhost:3000** en este PC. Para detener: `Ctrl+C` en la consola 
 
 También puedes ejecutar `iniciar.cmd` con doble clic en Windows; instala las dependencias solo si faltan y deja el servidor en segundo plano. Con ese lanzador, utiliza `detener.cmd` para detenerlo. El archivo `.local-runtime.json` guarda únicamente el identificador del proceso y el puerto, nunca credenciales. En Linux/Raspberry usa `npm install` y `npm start`.
 
-Al abrir la app sin una sesion activa aparece **Entra a tu cuenta**. El servidor `http://121212.io:80` esta preconfigurado; introduce solo tu usuario y tu contraseña y pulsa **Entrar y cargar canales**. La direccion se encontro en la instalacion local de MasTV y el usuario ya confirmo acceso en nuestra app. Primero se comprueba la cuenta y despues se carga el catalogo.
+Al abrir la app sin una sesion activa aparece **Entra a tu cuenta**. El servidor `http://121212.io:80` esta preconfigurado; introduce solo tu usuario y tu contraseña y pulsa **Entrar y cargar contenido**. La direccion se encontro en la instalacion local de MasTV y el usuario ya confirmo acceso en nuestra app. Primero se comprueba la cuenta y despues se carga el catalogo.
 
 **Cambiar servidor** permite editar la URL base si necesitas otro proveedor, incluyendo el puerto cuando corresponda. No pegues una lista M3U ni una URL que contenga credenciales o parametros. El servidor predeterminado tambien se puede configurar con la variable de entorno `PROVIDER_URL` antes de iniciar Node.js. El campo de servidor se mantiene plegado en el acceso habitual.
 
@@ -65,7 +65,7 @@ En Chrome o Edge en este PC, abre `http://localhost:3000` y pulsa **Instalar app
 
 El service worker solo conserva una lista explicita de archivos estaticos. No guarda respuestas de `/api/`, cuentas, catalogos, listas HLS, segmentos ni credenciales. Si el servidor no responde al abrir la app, muestra una pantalla sin conexion con **Volver a intentar**. Esto no permite ver TV sin internet. La sesion sigue caducando a las ocho horas; reinstalar o abrir desde otro origen puede requerir iniciar sesion otra vez.
 
-Las actualizaciones se preparan en segundo plano. Cuando hay una version esperando, aparece **Actualizar app**, que recarga la pagina y detiene el video tras pulsarlo. Al modificar archivos precargados, incrementa el nombre de `CACHE` en `public/sw.js`.
+Las actualizaciones se preparan en segundo plano. Cuando hay una version esperando, aparece **Actualizar app**, que recarga la pagina y detiene el video tras pulsarlo. Los scripts y estilos llevan una versión en su URL para que una instalación antigua no mezcle código anterior con la pantalla nueva. Al modificar archivos precargados, incrementa el nombre de `CACHE` y las versiones de los recursos en `public/sw.js`, `public/index.html` y `public/offline.html` juntos. Las pruebas verifican que el HTML y la caché coincidan.
 
 ### HTTPS con certificados propios
 
@@ -93,9 +93,23 @@ Referencias: [instalacion PWA y origen seguro](https://developer.mozilla.org/en-
 - Desconexión que invalida la sesión y cancela sus conexiones de video.
 - Protección contra solicitudes cruzadas y contra acceso del proxy a direcciones privadas. El proveedor debe ser accesible por una dirección pública. Las pruebas usan un mock privado habilitado únicamente en su proceso.
 
+## Películas y series
+
+La navegación incluye **TV en vivo**, **Películas** y **Series**, también accesibles con pestañas en el teléfono. Cada apartado consulta sus categorías y títulos al abrirlo, conserva el catálogo en memoria durante la sesión y tiene búsqueda, favoritos y carga incremental propios. **Actualizar** vuelve a consultar el apartado actual. Los favoritos de TV existentes se conservan; los de películas y series se guardan por separado para evitar confundir títulos con el mismo identificador.
+
+En **Películas**, toca un título para reproducirlo. En **Series**, abre una serie, selecciona la temporada (incluidos especiales si existen) y pulsa un episodio. Se muestra la sinopsis que entregue el proveedor. Si falla la consulta de episodios, puedes reintentar desde esa ventana. Cambiar de apartado permite seguir escuchando o viendo la reproducción actual.
+
+El servidor usa `get_vod_categories`, `get_vod_streams`, `get_series_categories`, `get_series` y `get_series_info`. Construye las rutas `movie/` y `series/` con la extensión declarada por el proveedor, sin usar enlaces directos arbitrarios. Los archivos se reproducen con el video nativo; las listas `.m3u8` siguen usando hls.js/HLS nativo. El proxy conserva los rangos de bytes para permitir avanzar o retroceder en archivos que los admitan y mantiene las credenciales fuera de las URLs del navegador. Referencia de implementación de la API: [cliente Xtream de tellytv](https://github.com/tellytv/go.xtream-codes/blob/master/xtream-codes.go).
+
+La disponibilidad de títulos depende de tu cuenta. MKV y otros contenedores o códecs pueden no reproducirse en Safari u otros navegadores; no hay conversión de formatos. El modo **Explorar ejemplo** incluye películas, series y temporadas ficticias para revisar la interfaz, además del video público de prueba.
+
+Los canales muestran su logo (`stream_icon`); películas y series muestran la portada entregada por el proveedor (`stream_icon`, `cover` o `cover_big`). Las imágenes se cargan al acercarse a la zona visible. Si faltan o fallan, se mantienen las iniciales del título. **Actualizar** vuelve a intentar las imágenes fallidas. Las portadas de películas y series usan proporción 2:3, y los logos conservan su imagen completa. El reproductor también muestra la imagen del contenido seleccionado.
+
+Las imágenes pasan por `/api/artwork/`, con acceso limitado al catálogo de la sesión y sin exponer la URL original del proveedor. Se validan destinos y redirecciones igual que en el proxy de video. Se admiten JPEG, PNG, WebP, GIF, AVIF y SVG, con un límite de 5 MiB por imagen; SVG se sirve con una política que impide ejecutar scripts. Las imágenes no se guardan en disco ni en la caché del navegador/PWA. Se reutilizan en memoria del servidor durante cinco minutos, con un máximo de 128 imágenes y 8 MiB por sesión, y se eliminan al desconectar o caducar la sesión.
+
 ## Límites de esta prueba
 
-- Solo TV en vivo HLS (`.m3u8`). Películas, series, EPG y conversión desde TS quedan fuera de esta versión.
+- TV en vivo HLS (`.m3u8`), películas y episodios en los formatos del proveedor compatibles con el navegador. EPG, transcodificación y conversión de archivos TS quedan fuera de esta versión.
 - El proveedor puede tener bloqueos por IP, user-agent o número de conexiones. Cambiar a `.m3u8` no convierte una transmisión TS en HLS.
 - Un contenedor HLS no garantiza que sus códecs puedan reproducirse en cada dispositivo. La app no transcodifica audio ni video.
 - Los canales HEVC/H.265 en TS pueden dar solo audio con HLS nativo. hls.js los reempaqueta en MP4 sin recodificar, siempre que el dispositivo admita HEVC. Se verifico imagen real en D SPORTS HD (Arg) y D SPORTS HD (Peru) en este PC. Si el dispositivo carece del decodificador, aun puede requerir otra variante del canal o conversion en servidor.

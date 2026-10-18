@@ -5,14 +5,14 @@ import vm from 'node:vm';
 
 // Exercise the shipped recovery handler with a controllable player and clock.
 const app = await readFile(new URL('../public/app.js', import.meta.url), 'utf8');
-const playback = app.slice(app.indexOf('function startPlayback(url)'), app.indexOf('function playbackSnapshot()'));
+const playback = app.slice(app.indexOf('function startPlayback('), app.indexOf('function playbackSnapshot()'));
 
-function player() {
+function player(format = 'hls') {
   const elements = new Map();
   const timers = new Map();
   let nextTimer = 0;
   const state = { playGeneration: 1, playing: { id: 'test' } };
-  const video = Object.assign(new EventTarget(), { dataset: {}, currentTime: 0, paused: false, seeking: false, readyState: 4, play: () => Promise.resolve() });
+  const video = Object.assign(new EventTarget(), { dataset: {}, currentTime: 0, paused: false, seeking: false, readyState: 4, play: () => Promise.resolve(), load() {}, setAttribute() {} });
   class Hls {
     static Events = { MANIFEST_PARSED: 'manifest', BUFFER_CODECS: 'codecs', FRAG_LOADED: 'loaded', FRAG_BUFFERED: 'buffered', ERROR: 'error' };
     static ErrorTypes = { NETWORK_ERROR: 'network', MEDIA_ERROR: 'media' };
@@ -43,7 +43,8 @@ function player() {
     offerCompatibleVariant: () => {},
     showPlaybackPlaying: () => { state.playbackPhase = 'playing'; },
   });
-  vm.runInContext(playback + '\nstartPlayback("/opaque-test-playlist");', context);
+  context.format = format;
+  vm.runInContext(playback + '\nstartPlayback("/opaque-test-playlist", format);', context);
   const error = (detail = Hls.ErrorDetails.FRAG_LOAD_ERROR) => state.hls.emit(Hls.Events.ERROR, { type: Hls.ErrorTypes.NETWORK_ERROR, details: detail, fatal: true });
   const retry = () => { const entry = timers.entries().next().value; assert.ok(entry); timers.delete(entry[0]); entry[1](); };
   return { state, video, clock, Hls, error, retry, failures, timers };
@@ -88,4 +89,12 @@ test('changing channel prevents a queued recovery from restarting the old source
   const p = player(); p.error(); p.state.playGeneration++; p.retry();
   assert.equal(p.state.hls.starts, 0);
   assert.equal(p.state.hls.sourceLoads, 1);
+});
+
+test('VOD files use native playback even when hls.js is available', () => {
+  const p = player('file');
+  assert.equal(p.video.dataset.playbackEngine, 'native-file');
+  assert.equal(p.video.src, '/opaque-test-playlist');
+  assert.equal(p.state.hls, undefined);
+  assert.equal(p.state.playbackFormat, 'file');
 });

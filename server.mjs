@@ -20,6 +20,24 @@ const json = (res, data, status = 200) => {
 };
 const id = () => randomBytes(24).toString('hex');
 const textValue = (value, max = 180) => typeof value === 'string' || typeof value === 'number' ? String(value).slice(0, max) : '';
+const catalogTypes = {
+  live: { categories: 'get_live_categories', streams: 'get_live_streams', label: 'TV' },
+  movies: { categories: 'get_vod_categories', streams: 'get_vod_streams', label: 'películas' },
+  series: { categories: 'get_series_categories', streams: 'get_series', label: 'series' },
+};
+const mediaExtension = value => value == null || value === '' ? 'mp4' : /^[a-z0-9]{2,5}$/i.test(String(value)) ? String(value).toLowerCase() : '';
+const ARTWORK_LIMIT = 5 * 1024 * 1024;
+const ARTWORK_CACHE_LIMIT = 8 * 1024 * 1024;
+function artworkSource(base, ...values) {
+  for (const value of values) {
+    if (typeof value !== 'string' || !value.trim() || value.length > 8192 || /^(?:null|undefined|n\/a|0)$/i.test(value.trim())) continue;
+    try {
+      const url = new URL(value.trim(), base);
+      if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) { url.hash = ''; return url.href; }
+    } catch { /* Try the next image field, or use the initials in the UI. */ }
+  }
+  return null;
+}
 
 async function body(req) {
   try { return JSON.parse((await readLimited(req, 8192)).toString('utf8')); }
@@ -118,7 +136,7 @@ export function createApp({ allowPrivate = false, freeChannels = FREE_CHANNELS, 
           };
           candidate.expires = Date.now() + SESSION_TTL;
           candidate.mediaIdentityKey = randomBytes(32);
-          candidate.media = new Map(); candidate.mediaByUrl = new Map(); candidate.channels = new Map(); candidate.controllers = new Set();
+          candidate.media = new Map(); candidate.mediaByUrl = new Map(); candidate.catalogs = new Map(); candidate.episodes = new Map(); candidate.artwork = new Map(); candidate.artworkBytes = 0; candidate.controllers = new Set();
           const newKey = id();
           if (key) destroySession(key);
           if (sessions.size >= 50) throw new AppError('Hay demasiadas sesiones abiertas. Intenta más tarde.', 503);
@@ -136,26 +154,88 @@ export function createApp({ allowPrivate = false, freeChannels = FREE_CHANNELS, 
         if (publicResource) session = publicMedia;
         if (!session) throw new AppError('Conecta tu cuenta para continuar.', 401);
         if (url.pathname === '/api/catalog' && req.method === 'GET') {
+          const type = url.searchParams.get('type') || 'live';
+          const config = Object.hasOwn(catalogTypes, type) && catalogTypes[type];
+          if (!config) throw new AppError('Tipo de catálogo no válido.');
           const [categories, streams] = await Promise.all([
-            playerApi(session, 'get_live_categories', {}, { allowPrivate }),
-            playerApi(session, 'get_live_streams', {}, { allowPrivate }),
+            playerApi(session, config.categories, {}, { allowPrivate }),
+            playerApi(session, config.streams, {}, { allowPrivate }),
           ]);
-          if (!Array.isArray(categories) || !Array.isArray(streams)) throw new AppError('El proveedor no devolvió un catálogo de TV válido.', 502);
-          const channels = streams.filter(s => /^\d+$/.test(String(s.stream_id))).map(s => ({
-            id: String(s.stream_id), name: textValue(s.name), category: textValue(s.category_id, 64),
+          if (!Array.isArray(categories) || !Array.isArray(streams)) throw new AppError(`El proveedor no devolvió un catálogo de ${config.label} válido.`, 502);
+          const channels = streams.filter(s => s && /^\d+$/.test(String(type === 'series' ? s.series_id : s.stream_id))).map(s => ({
+            id: String(type === 'series' ? s.series_id : s.stream_id), name: textValue(s.name), category: textValue(s.category_id, 64),
             epg: textValue(s.epg_channel_id),
+            kind: type, extension: type === 'movies' ? mediaExtension(s.container_extension) : undefined,
+            year: textValue(s.year || s.releaseDate || s.release_date, 10), rating: textValue(s.rating, 8),
+            artworkSource: type === 'series' ? artworkSource(session.base, s.cover, s.cover_big, s.stream_icon) : artworkSource(session.base, s.stream_icon, s.cover, s.cover_big),
           }));
-          session.channels = new Map(channels.map(c => [c.id, c]));
+          session.catalogs.set(type, new Map(channels.map(c => [c.id, c])));
+          if (type === 'series') session.episodes.clear();
           return json(res, {
-            categories: categories.map(c => ({ id: textValue(c.category_id, 64), name: textValue(c.category_name) })),
-            channels,
+            categories: categories.filter(Boolean).map(c => ({ id: textValue(c.category_id, 64), name: textValue(c.category_name) })),
+            channels: channels.map(({ artworkSource, ...channel }) => ({ ...channel, artwork: artworkSource ? `/api/artwork/${type}/${channel.id}` : null })),
           });
         }
+        const artworkRoute = /^\/api\/artwork\/(live|movies|series)\/(\d+)$/.exec(url.pathname);
+        if (artworkRoute && ['GET', 'HEAD'].includes(req.method)) {
+          const target = session.catalogs.get(artworkRoute[1])?.get(artworkRoute[2])?.artworkSource;
+          if (!target) throw new AppError('No hay una portada disponible para este título.', 404);
+          let artwork = session.artwork.get(target);
+          if (artwork && artwork.expires <= Date.now()) {
+            session.artwork.delete(target); session.artworkBytes -= artwork.bytes.length; artwork = null;
+          }
+          if (!artwork) {
+            const controller = new AbortController();
+            session.controllers.add(controller);
+            const abort = () => controller.abort();
+            res.once('close', abort);
+            try {
+              const upstream = await remoteRequest(target, { allowPrivate, signal: controller.signal, timeout: 12000, headers: { Accept: 'image/avif,image/webp,image/png,image/jpeg,image/gif,image/svg+xml' } });
+              const type = (upstream.response.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+              if (!/^image\/(?:jpeg|png|webp|gif|avif|svg\+xml)$/.test(type)) { upstream.response.destroy(); throw new AppError('El proveedor no devolvió una imagen compatible.', 502); }
+              const bytes = await readLimited(upstream.response, ARTWORK_LIMIT);
+              artwork = { type, bytes, expires: Date.now() + 5 * 60 * 1000 };
+              const previous = session.artwork.get(target);
+              if (previous) { session.artworkBytes -= previous.bytes.length; session.artwork.delete(target); }
+              while (session.artwork.size >= 128 || session.artworkBytes + bytes.length > ARTWORK_CACHE_LIMIT) {
+                const first = session.artwork.keys().next().value;
+                session.artworkBytes -= session.artwork.get(first).bytes.length; session.artwork.delete(first);
+              }
+              session.artwork.set(target, artwork); session.artworkBytes += bytes.length;
+            } finally { res.off('close', abort); session.controllers.delete(controller); }
+          } else {
+            session.artwork.delete(target); session.artwork.set(target, artwork);
+          }
+          // Images can contain provider credentials in their original URLs. Keep
+          // URLs and bytes in this session's memory, never in browser/disk caches.
+          res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; style-src 'unsafe-inline'");
+          res.writeHead(200, { 'Content-Type': artwork.type, 'Content-Length': artwork.bytes.length });
+          return res.end(req.method === 'HEAD' ? undefined : artwork.bytes);
+        }
+        if (url.pathname === '/api/series' && req.method === 'GET') {
+          const seriesId = url.searchParams.get('id');
+          if (!session.catalogs.get('series')?.has(seriesId)) throw new AppError('La serie no está en tu catálogo.', 404);
+          const info = await playerApi(session, 'get_series_info', { series_id: seriesId }, { allowPrivate });
+          if (!info || !info.episodes || typeof info.episodes !== 'object') throw new AppError('El proveedor no devolvió episodios válidos.', 502);
+          const episodes = Object.entries(info.episodes).flatMap(([season, items]) => Array.isArray(items) ? items.filter(item => item && /^\d+$/.test(String(item.id))).map(item => ({
+            id: String(item.id), name: textValue(item.title || `Episodio ${item.episode_num || item.id}`),
+            season: textValue(item.season ?? season, 16), number: textValue(item.episode_num, 8),
+            extension: mediaExtension(item.container_extension), kind: 'episode', seriesId,
+            duration: textValue(item.info?.duration, 24),
+          })) : []);
+          if (!session.episodes.has(seriesId) && session.episodes.size >= 64) session.episodes.delete(session.episodes.keys().next().value);
+          session.episodes.set(seriesId, new Map(episodes.map(episode => [episode.id, episode])));
+          return json(res, { plot: textValue(info.info?.plot, 1600), episodes });
+        }
         if (url.pathname === '/api/play' && req.method === 'POST') {
-          const { channelId } = await body(req);
-          if (!session.channels.has(String(channelId))) throw new AppError('El canal no está en tu catálogo.', 404);
-          const stream = new URL(`live/${encodeURIComponent(session.username)}/${encodeURIComponent(session.password)}/${channelId}.m3u8`, session.base);
-          return json(res, { url: register(session, stream), format: 'hls' });
+          const { channelId, type = 'live', seriesId } = await body(req);
+          const item = type === 'episode' ? session.episodes.get(String(seriesId))?.get(String(channelId)) : session.catalogs.get(type)?.get(String(channelId));
+          if (!item || !['live', 'movies', 'episode'].includes(type)) throw new AppError('El contenido no está en tu catálogo.', 404);
+          const extension = type === 'live' ? 'm3u8' : item.extension;
+          if (!extension) throw new AppError('El proveedor indica un formato de video no válido.', 422);
+          const folder = type === 'movies' ? 'movie' : type === 'episode' ? 'series' : 'live';
+          const stream = new URL(`${folder}/${encodeURIComponent(session.username)}/${encodeURIComponent(session.password)}/${item.id}.${extension}`, session.base);
+          return json(res, { url: register(session, stream), format: extension === 'm3u8' ? 'hls' : 'file' });
         }
         if ((publicResource || url.pathname.startsWith('/api/media/')) && ['GET', 'HEAD'].includes(req.method)) {
           const token = url.pathname.slice(publicResource ? '/api/free/media/'.length : '/api/media/'.length);
